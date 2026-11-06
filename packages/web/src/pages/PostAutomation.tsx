@@ -25,7 +25,13 @@ type AutopilotSection =
 
 export default function PostAutomation() {
   const { currentOrg, currentProject } = useWorkspace();
-  const [activeTab, setActiveTab] = useState<AutopilotSection>('strategy');
+  // ?tab=calendar opens a tab directly (the chat links straight to the calendar).
+  const [activeTab, setActiveTab] = useState<AutopilotSection>(() => {
+    try {
+      const t = new URLSearchParams(window.location.search).get('tab');
+      return (t === 'calendar' ? 'calendar' : 'strategy') as AutopilotSection;
+    } catch { return 'strategy'; }
+  });
   const [overview, setOverview] = useState<AutopilotOverview | null>(null);
   const [opsHealth, setOpsHealth] = useState<any | null>(null);
   const [controls, setControls] = useState<any | null>(null);

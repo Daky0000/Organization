@@ -215,7 +215,7 @@ export function registerAIConfigRoutes(deps: AIConfigDeps): Router {
       await callAINonStreaming(aiCfg.provider, rawKey, aiCfg.model, 'You are a test assistant.', 'Reply with just: ok', 16);
       return res.json({ success: true, message: `Connected — ${aiCfg.provider === 'google' ? 'Google Gemini' : 'Anthropic'} model ${aiCfg.model} is responding` });
     } catch (err: any) {
-      const msg = err?.message || 'Connection failed';
+      const msg = err?.detail || err?.message || 'Connection failed'; // admins see the setup detail
       return res.status(400).json({ success: false, message: msg });
     }
   });

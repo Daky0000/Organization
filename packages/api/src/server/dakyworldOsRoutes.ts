@@ -1,4 +1,5 @@
 import express from 'express';
+import { creditsForMagnific, magnificAudioCost, magnificEditCost, magnificImageCost, magnificLipSyncCost, magnificOneCost, magnificVideoCost } from './aiPricing.ts';
 import type { Router, Response } from 'express';
 import type { Request } from '../types/http.ts';
 import type { Pool } from 'pg';
@@ -484,19 +485,20 @@ export function registerDakyworldOsRoutes({
     }
 
     // Determine credit cost
-    let creditCost = 6;
+    // Magnific's real price × 1.54 (server/aiPricing.ts).
+    let creditCost = creditsForMagnific(200);
     if (genType === 'magnific-one') {
-      creditCost = body.mode === 'draft' ? 4 : (body.resolution === '4k' ? 8 : 6);
+      creditCost = creditsForMagnific(magnificOneCost(body));
     } else if (genType === 'image') {
-      creditCost = MAGNIFIC_IMAGE_MODELS[model]?.credits ?? 6;
+      creditCost = creditsForMagnific(magnificImageCost(MAGNIFIC_IMAGE_MODELS[model] ? model : 'magnific-one', body));
     } else if (genType === 'edit') {
-      creditCost = body.edit_type === 'remove-background' ? 1 : 5;
+      creditCost = creditsForMagnific(magnificEditCost(String(body.edit_type || 'upscale'), body.scale_factor));
     } else if (genType === 'video') {
-      creditCost = MAGNIFIC_VIDEO_MODELS[model]?.credits ?? 25;
+      creditCost = creditsForMagnific(magnificVideoCost(String(model || 'kling-v2-6-pro'), body));
     } else if (genType === 'lip-sync' || genType === 'lipsync') {
-      creditCost = 30;
+      creditCost = creditsForMagnific(magnificLipSyncCost());
     } else if (genType === 'audio') {
-      creditCost = body.audio_type === 'music-generation' ? 6 : 4;
+      creditCost = creditsForMagnific(magnificAudioCost(String(body.audio_type || 'sound-effects'), body.duration_seconds));
     } else if (genType === 'space' || genType === 'flow') {
       const sim = await magnificExecuteSpaceOrFlow({ ...body, action: 'simulate_cost' }, magnificKey);
       creditCost = sim.estimated_credits ?? 10;

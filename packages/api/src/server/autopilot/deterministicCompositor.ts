@@ -1,4 +1,7 @@
 import { deflateSync } from 'node:zlib';
+import jpegJs from 'jpeg-js';
+
+const encodeJpeg = jpegJs.encode;
 import type { BrandProfileRecord, CreativeBriefRecord, VideoStoryboardScene as StoryboardScene } from './types.ts';
 
 /**
@@ -183,6 +186,7 @@ export function renderBrandCardRasterPngDataUrl(params: {
   brandName?: string;
   headline?: string;
   ctaText?: string;
+  format?: 'png' | 'jpeg';
 }): { dataUrl: string; width: number; height: number } {
   const width = Math.min(720, Math.max(120, params.width ?? 240));
   const height = Math.min(900, Math.max(150, params.height ?? 300));
@@ -255,6 +259,14 @@ export function renderBrandCardRasterPngDataUrl(params: {
   const ctaTextColor = calculateContrastRatio('#FFFFFF', params.accentHex) >= 4.5 ? { r: 255, g: 255, b: 255 } : { r: 13, g: 21, b: 38 };
   drawBitmapString(raw, stride, width, height, cta, 24, ctaY + 5, 2, ctaTextColor);
 
+  if (params.format === 'jpeg') {
+    // Instagram takes JPEG only. Same pixels, without the per-row PNG filter byte.
+    const rgba = Buffer.alloc(width * height * 4);
+    for (let y = 0; y < height; y++) raw.copy(rgba, y * width * 4, y * stride + 1, (y + 1) * stride);
+    const jpeg = encodeJpeg({ data: rgba, width, height }, 92).data;
+    return { dataUrl: `data:image/jpeg;base64,${Buffer.from(jpeg).toString('base64')}`, width, height };
+  }
+
   const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
@@ -313,6 +325,28 @@ export interface DeterministicLayerSpec {
   }>;
   preview_raster_data_url: string;
   preview_svg_markup: string;
+}
+
+/**
+ * A full-size raster of a layer for delivery (the layer's own preview is a
+ * 240 px thumbnail). The renderer caps height at 900 px, so width is chosen
+ * to keep the canvas aspect ratio exact.
+ */
+export function renderLayerRaster(layer: DeterministicLayerSpec, opts: { format: 'png' | 'jpeg'; brandName?: string }) {
+  const { width: cw, height: ch } = layer.canvas;
+  const width = Math.max(120, Math.min(720, Math.floor((900 * cw) / ch)));
+  const height = Math.round((width * ch) / cw);
+  return renderBrandCardRasterPngDataUrl({
+    width,
+    height,
+    backgroundHex: layer.palette_applied.background_hex,
+    accentHex: layer.palette_applied.accent_hex,
+    textHex: layer.palette_applied.text_hex,
+    brandName: opts.brandName,
+    headline: layer.text_blocks.find((b) => b.role === 'headline')?.exact_text,
+    ctaText: layer.text_blocks.find((b) => b.role === 'cta')?.exact_text,
+    format: opts.format,
+  });
 }
 
 export function composeDeterministicBrandLayer(params: {

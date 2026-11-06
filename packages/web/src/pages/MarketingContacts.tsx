@@ -1,3 +1,5 @@
+import { tourAction } from '../components/tour/tourCore';
+import { useTourTab } from '../components/tour/useTourTab';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BarChart2,
@@ -719,7 +721,7 @@ function ContactsTab() {
         </div>
       )}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-48">
+        <div data-tour="contacts-search" className="relative flex-1 min-w-48">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search contacts…" className="w-full rounded-xl border border-slate-200 bg-white pl-9 pr-4 py-2 text-sm outline-none focus:border-slate-400" />
         </div>
@@ -742,10 +744,10 @@ function ContactsTab() {
             className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">
             <Download size={14} /> {selectedIds.size > 0 ? `Export (${selectedIds.size})` : 'Export CSV'}
           </button>
-          <button onClick={() => setShowImport(true)} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          <button data-tour="contacts-import" onClick={() => setShowImport(true)} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
             <Upload size={14} /> Import CSV
           </button>
-          <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+          <button data-tour="contacts-add" onClick={() => setShowAdd(true)} className="flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
             <Plus size={14} /> Add Contact
           </button>
         </div>
@@ -1606,7 +1608,7 @@ function SegmentsTab() {
       )}
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-slate-500">Target contacts dynamically by email, tags, activity, and more.</p>
-        <button type="button" onClick={() => setModal({ mode: 'create' })}
+        <button data-tour="segments-new" type="button" onClick={() => setModal({ mode: 'create' })}
           className="flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
           <Plus size={14} /> New Segment
         </button>
@@ -2523,6 +2525,8 @@ function LeadGroupDetail({ group: initialGroup, onBack }: { group: LeadGroup; on
 
 export default function MarketingContacts() {
   const [tab, setTab] = useState<Tab>('contacts');
+  // A guided-tour step can show a tab; clicking one tells the tour (for "Try it" steps).
+  useTourTab('contacts', TABS.map((t) => t.id), setTab);
 
   return (
     <div className="space-y-6 pb-8">
@@ -2531,12 +2535,13 @@ export default function MarketingContacts() {
         <p className="mt-2 text-base text-slate-500">Manage your audience — subscribers, segments, and leads.</p>
       </div>
 
-      <div className="flex items-center gap-1 border-b border-slate-200">
+      <div data-tour="contacts-tabs" className="flex items-center gap-1 border-b border-slate-200">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             type="button"
-            onClick={() => setTab(id)}
+            data-tour={`tab-${id}`}
+            onClick={() => { setTab(id); tourAction(`contacts-tab:${id}`); }}
             className={`flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 transition-colors -mb-px ${
               tab === id ? 'border-slate-950 text-slate-950' : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}

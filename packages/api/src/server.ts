@@ -50,6 +50,7 @@ import { registerCRMActivitiesRoutes } from './server/crmActivitiesRoutes.ts';
 import { registerSalesRoutes } from './server/salesRoutes.ts';
 import { buildSalesEngine } from './server/sales/salesEngine.ts';
 import { registerCalendarRoutes } from './server/calendarRoutes.ts';
+import { registerUiStateRoutes } from './server/uiStateRoutes.ts';
 import { registerConnectorRegistryRoutes } from './server/connectorRegistryRoutes.ts';
 import { registerConnectorPreferencesRoutes } from './server/connectorPreferencesRoutes.ts';
 import { registerConnectorSyncRoutes, processDueConnectorSyncJobs } from './server/connectorSyncRoutes.ts';
@@ -90,10 +91,15 @@ import { authLimiter, passwordLimiter, idempotencyMiddleware } from './middlewar
 import { registerDakyworldOsRoutes } from './server/dakyworldOsRoutes.ts';
 import { registerSocialInboxRoutes } from './server/socialInboxRoutes.ts';
 import { registerClientApprovalAndWebhookRoutes, runDueAgentSchedules } from './server/clientApprovalRoutes.ts';
-import { registerAutopilotRoutes } from './server/autopilot/autopilotRoutes.ts';
+import { registerAutopilotRoutes, buildPublishToplatformAdapter } from './server/autopilot/autopilotRoutes.ts';
 import { createAutopilotRepository } from './server/autopilot/repository.ts';
-import { buildAutopilotVisualAdapter, buildAutopilotCopyAdapter, getAutopilotProviderStatus } from './server/autopilot/autopilotProviderBridge.ts';
+import { buildAutopilotVisualAdapter, buildAutopilotCopyAdapter, getAutopilotProviderStatus, getConfiguredVisualProviders } from './server/autopilot/autopilotProviderBridge.ts';
 import { processDueAutopilotPublications } from './server/autopilot/lifecycleAndPublishingService.ts';
+import { resolveAssetStorage } from './server/autopilot/assetStorage.ts';
+import { verifyTenantPublisher } from './server/autopilot/tenantContext.ts';
+import { createPgJobAccounting, sweepStaleReservations } from './server/autopilot/billingAndBudgetService.ts';
+import { buildAutopilotDiagnostics, sweepExpiredAssets } from './server/autopilot/diagnostics.ts';
+import { BUILD_COMMIT_SHA } from './build-info.ts';
 import { buildWorkflowEngine } from './server/workflowRoutes.ts';
 import { registerAIChatRoutes } from './server/aiChatRoutes.ts';
 import { registerMagnificRoutes, getMagnificApiKey, getFreepikApiKey, magnificPost, pollMagnificTask, magnificGenerateImage, freepikGenerateImage, MAGNIFIC_BASE, FREEPIK_BASE, ASPECT_TO_WH, MAGNIFIC_IMAGE_MODELS, MAGNIFIC_VIDEO_MODELS, ASPECT_RATIO_MAP, FREEPIK_IMAGE_MODELS, proxyHeaders, sanitizeMagnificError } from './server/magnificRoutes.ts';
@@ -111,11 +117,18 @@ import { registerLinkedInRoutes } from './server/linkedinRoutes.ts';
 import { registerSocialConnectRoutes, type SocialConnectDeps } from './server/socialConnectRoutes.ts';
 import { registerSocialRoutes } from './server/socialRoutes.ts';
 import { buildMediaModule } from './server/mediaRoutes.ts';
+import { registerMediaStoreRoutes, runMediaMaintenance } from './server/mediaStore.ts';
+import { registerNvidiaRoutes } from './server/nvidiaRoutes.ts';
+import { registerAIOpsRoutes } from './server/aiOpsRoutes.ts';
+import { runAIMonitor } from './server/aiTrace.ts';
+import { refreshNvidiaModels } from './server/nvidiaModels.ts';
+import { pruneCheckpoints } from './server/aiCheckpoints.ts';
+import { pruneAIResponseCache } from './ai-helpers.ts';
 import { registerCardTemplateRoutes } from './server/cardRoutes.ts';
 import { registerPricingRoutes } from './server/pricingRoutes.ts';
 import { registerWordPressRoutes } from './server/wordpressRoutes.ts';
 import { runPaymentMigrations } from './payment-migrations.ts';
-import { runDatabaseMigrations } from './db-migrations.ts';
+import { AUTOPILOT_P0_SCHEMA_VERSION, runDatabaseMigrations } from './db-migrations.ts';
 import { migrateLegacyTokenData } from './token-data.ts';
 import { pool, dbReady, setDbReady, setDbInitError, dbInitError, hasDatabase, dbQuery, normalizeEmail, normalizeUsername } from './db.ts';
 import type {
@@ -219,31 +232,31 @@ app.use(requestIdMiddleware);
 // Registered BEFORE all other middleware so nothing can intercept it
 app.get('/ping', (_req, res) => res.send('pong'));
 app.get('/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+// Public liveness: no provider or tenant detail. The restricted view is
+// /api/autopilot/ops/diagnostics (platform admins only).
 app.get('/api/health', async (_req, res) => {
   let ready = dbReady;
-  let migrationVersion = '2026.10.29-autopilot-v2-production';
+  let migrationVersion: string | null = null;
   if (ready && config.databaseUrl) {
     try {
       await pool.query('SELECT 1');
-      const migRes = await pool.query('SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1').catch(() => ({ rows: [] }));
-      if (migRes.rows?.[0]?.version) {
-        migrationVersion = migRes.rows[0].version;
-      }
+      // The schema version this build requires, or null when it is missing. Not the newest
+      // row: older migrations re-stamp applied_at on every boot, so ordering by time names
+      // whichever one ran last.
+      const migRes = await pool.query('SELECT version FROM schema_migrations WHERE version = $1', [AUTOPILOT_P0_SCHEMA_VERSION]).catch(() => ({ rows: [] as any[] }));
+      migrationVersion = migRes.rows?.[0]?.version ?? null;
     }
     catch { ready = false; }
   }
-  const providerStatus = await getAutopilotProviderStatus(pool);
   res.status(ready ? 200 : 503).json({
     status: ready ? 'ok' : 'unavailable',
     timestamp: new Date().toISOString(),
     service: 'contentflow-api',
-    revision: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.COMMIT_SHA || 'master',
+    // Baked in at build time; "unknown" rather than a guess when the build had no SHA.
+    revision: BUILD_COMMIT_SHA,
+    deploy_revision: process.env.RAILWAY_GIT_COMMIT_SHA || null,
     migrationVersion,
     db: { configured: Boolean(config.databaseUrl), ready },
-    autopilot: {
-      providers: providerStatus,
-      status: 'operational',
-    },
   });
 });
 
@@ -286,6 +299,8 @@ app.use(
         styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
         fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
         imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+        // Stored video/audio redirects to the R2 bucket host, as images do.
+        mediaSrc: ["'self'", 'data:', 'blob:', 'https:'],
         connectSrc: [
           "'self'",
           config.appUrl,
@@ -709,6 +724,8 @@ app.use('/api/pages', registerPagesRoutes({ requireAdmin, hasDatabase, pool: poo
 
 // ─── Media Library ─────────────────────────────────────────────────────────────
 const mediaModule = buildMediaModule({ requireAuth, requireAdmin, hasDatabase, pool });
+// Before the media module: its /media/:id/:filename would otherwise claim /media/r2/<file>.
+app.use('/', registerMediaStoreRoutes());
 app.use('/', mediaModule.router);
 syncProfileMedia = mediaModule.syncProfileMedia;
 syncCardTemplateMedia = mediaModule.syncCardTemplateMedia;
@@ -871,6 +888,17 @@ const autopilotVisualAdapter = buildAutopilotVisualAdapter({ pool: pool!, hasDat
 const autopilotCopyAdapter = buildAutopilotCopyAdapter();
 const autopilotRepo = createAutopilotRepository({ pool: pool!, hasDatabase });
 
+// Media storage is resolved once the database is ready (the postgres driver
+// needs it); until then generation refuses with STORAGE_NOT_CONFIGURED.
+const resolveAutopilotStorage = () => resolveAssetStorage({
+  pool: pool!,
+  hasDatabase,
+  publicBaseUrl: process.env.BACKEND_PUBLIC_URL || config.appUrl,
+});
+let autopilotStorage = resolveAutopilotStorage();
+const autopilotAuthorizePublisher = (tenantId: string, userId: string) => verifyTenantPublisher(pool!, hasDatabase, tenantId, userId);
+const autopilotStagedPublishers = { instagram: distModule.instagramStagedPublisher };
+
 const autopilotRouter = registerAutopilotRoutes({
   requireAuth,
   requireAdmin,
@@ -881,9 +909,33 @@ const autopilotRouter = registerAutopilotRoutes({
   visualAdapter: autopilotVisualAdapter,
   copyAdapter: autopilotCopyAdapter,
   repo: autopilotRepo,
+  get assetStorage() { return autopilotStorage.driver; },
+  availableProviders: () => getConfiguredVisualProviders(pool),
+  stagedPublishers: autopilotStagedPublishers,
+  authorizePublisher: autopilotAuthorizePublisher,
 });
 app.use('/api/v1', autopilotRouter);
 app.use('/api', autopilotRouter);
+
+// Restricted release diagnostics: exact build, schema fingerprint, storage,
+// provider health (configured vs checked) and queue backlog. No secrets.
+app.get('/api/autopilot/ops/diagnostics', async (req: Request, res: Response) => {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  try {
+    const report = await buildAutopilotDiagnostics({
+      pool: hasDatabase() ? pool! : null,
+      storage: autopilotStorage,
+      providerDeps: { pool: pool!, hasDatabase },
+      checkStorageWrite: req.query.probe === 'storage',
+      forceProviderCheck: req.query.refresh === '1',
+    });
+    return res.json({ success: true, ...report });
+  } catch (err: any) {
+    logger.error({ err: err?.message }, 'autopilot_diagnostics_failed');
+    return res.status(500).json({ success: false, error: 'Diagnostics failed' });
+  }
+});
 
 // ─── AI Sales OS ──────────────────────────────────────────────────────────────
 // Built on the CRM contact rather than beside it: sales_lead_profiles hangs off
@@ -901,11 +953,17 @@ app.use('/api/surveys', registerSurveyRoutes({ requireAuth, pool: pool! }));
 app.use('/api/public/surveys', registerPublicSurveyRoutes({ pool: pool!, fireAutomationTrigger: automationEngine.fireAutomationTrigger }));
 
 // ─── Leads & Google Sheets ──────────────────────────────────────────────────
-const GS_CLIENT_ID = process.env.GOOGLE_SHEETS_CLIENT_ID || '';
-const GS_CLIENT_SECRET = process.env.GOOGLE_SHEETS_CLIENT_SECRET || '';
+// Admin → Integrations → Google Sheets wins; env is fallback only
+const getGsCredentials = async () => {
+  const cfg = await getPlatformConfig('google_sheets').catch(() => ({} as Record<string, string>));
+  return {
+    clientId: String(cfg.clientId || process.env.GOOGLE_SHEETS_CLIENT_ID || '').trim(),
+    clientSecret: String(cfg.clientSecret || process.env.GOOGLE_SHEETS_CLIENT_SECRET || '').trim(),
+  };
+};
 const GS_REDIRECT = (process.env.API_URL || config.appUrl).replace(/\/$/, '') + '/api/google-sheets/callback';
 const FRONTEND_URL = process.env.VITE_APP_URL || process.env.FRONTEND_URL || 'https://marketing.dakyx.com';
-const leadsDeps = { requireAuth, pool: pool!, frontendUrl: FRONTEND_URL, gsClientId: GS_CLIENT_ID, gsClientSecret: GS_CLIENT_SECRET, gsRedirect: GS_REDIRECT };
+const leadsDeps = { requireAuth, pool: pool!, frontendUrl: FRONTEND_URL, getGsCredentials, gsRedirect: GS_REDIRECT };
 app.use('/api/leads', registerLeadsRoutes(leadsDeps));
 app.use('/api/google-sheets', registerGoogleSheetsRoutes(leadsDeps));
 
@@ -929,6 +987,8 @@ app.use('/r', registerShortLinkRoutes({ pool: pool!, fireAutomationTrigger: auto
 // ─── End Campaign & Funnel Builder ────────────────────────────────────────────
 
 // ── AI Chat & Multi-Agent Routes ───────────────────────────────────────────
+// Per-user UI state that follows the user between devices (guided-tour progress).
+app.use('/api', registerUiStateRoutes({ requireAuth, dbQuery }));
 app.use('/api', registerAIChatRoutes({ requireAuth, getAIConfig, resolveActiveKey, callAINonStreaming, GEMINI_MODELS, pool, dbQuery, createNotification, checkTaskActions, getUserConnectedAccounts, AGENT_DEFS }));
 
 
@@ -972,6 +1032,8 @@ app.use('/api/admin/higgsfield', registerHiggsfieldRoutes({ requireAdmin, hasDat
 
 // ─── Magnific AI Routes ─────────────────────────────────────────────────────────
 app.use('/api', registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase, pool }));
+app.use('/api', registerNvidiaRoutes({ requireAdmin, hasDatabase, pool }));
+app.use('/api', registerAIOpsRoutes({ requireAdmin, hasDatabase, inMemoryPlatformConfigs }));
 
 // ── Nova Design Agent Routes ───────────────────────────────────────────────────
 const { router: novaRouter, runScheduledAgents, runAgentForUser } = buildNovaModule({ requireAuth, requireAdmin, hasDatabase, dbQuery, pool, getAIConfig, resolveActiveKey, decryptAIKey, AGENT_DEFS });
@@ -1078,51 +1140,48 @@ if (config.nodeEnv !== 'test') {
     // Run autonomous multi-agent schedules & handoffs every 10 minutes
     void runDueAgentSchedules(pool);
     setInterval(() => void runDueAgentSchedules(pool), 10 * 60 * 1000);
+    // Keep media out of the database: move files to R2 once it is configured,
+    // and remove database copies nothing needs any more (every 30 minutes).
+    setTimeout(() => void runMediaMaintenance(), 3 * 60 * 1000);
+    setInterval(() => void runMediaMaintenance(), 30 * 60 * 1000);
     // Publish due scheduled posts every 2 minutes
     const schedulerDeps = { queueSocialAutomationForPublishedPost: distModule.queueSocialAutomationForPublishedPost, fireWorkflowTriggers };
     void publishDuePosts(schedulerDeps);
     setInterval(() => void publishDuePosts(schedulerDeps), 2 * 60 * 1000);
 
-    // Run due Autopilot publications every 60 seconds
+    // Autopilot publishing: leased (FOR UPDATE SKIP LOCKED) state machine, run
+    // every 30 s. Instagram goes through staged containers; other channels are
+    // one-shot and never get an invented post ID.
+    autopilotStorage = resolveAutopilotStorage();
+    const autopilotWorkerId = `api-${process.pid}-${randomUUID().slice(0, 6)}`;
+    const autopilotPublisherAdapter = buildPublishToplatformAdapter(publishToplatform);
     const runAutopilotPublishing = () =>
       processDueAutopilotPublications({
         repo: autopilotRepo,
-        publisherAdapter: async (input) => {
-          if (!publishToplatform) throw new Error('publishToplatform not configured');
-          const coverImage = input.mediaAssets.find((m) => m.type === 'image')?.url ?? null;
-          const videoUrl = input.mediaAssets.find((m) => m.type === 'video')?.url ?? null;
-          const res = await publishToplatform(
-            input.userId,
-            {
-              id: input.idempotencyKey,
-              title: input.title,
-              excerpt: input.caption.slice(0, 260),
-              content: input.caption,
-              featured_image: coverImage,
-              video_url: videoUrl,
-              media_assets: input.mediaAssets,
-              post_format: input.platformMediaType,
-              approval_status: 'approved',
-              status: 'published',
-            },
-            input.channel,
-            {
-              mediaType: input.platformMediaType,
-              mediaAssets: input.mediaAssets,
-              captionOverride: input.caption,
-            },
-          );
-          if (res.status !== 'published') {
-            const err = new Error(res.error || `Failed to publish to ${input.channel}`);
-            (err as any).status = res.retryable ? 503 : 400;
-            throw err;
-          }
-          return { remotePostId: res.platformPostId || `remote_${randomUUID().slice(0, 8)}` };
-        },
+        publisherAdapter: autopilotPublisherAdapter,
+        stagedPublishers: autopilotStagedPublishers,
+        storage: autopilotStorage.driver,
+        pool: pool!,
+        authorizePublisher: autopilotAuthorizePublisher,
+        workerId: autopilotWorkerId,
       }).catch((err) => logger.error({ err }, 'autopilot_publishing_worker_failed'));
 
     void runAutopilotPublishing();
-    setInterval(() => void runAutopilotPublishing(), 60 * 1000);
+    setInterval(() => void runAutopilotPublishing(), 30 * 1000);
+
+    // Jobs that crashed mid-generation: release holds that never reached a
+    // provider; flag submitted ones for reconciliation. Expired demo assets go too.
+    const autopilotAccounting = createPgJobAccounting(pool!);
+    const runAutopilotSweeps = async () => {
+      if (!hasDatabase()) return;
+      await sweepStaleReservations(pool!, autopilotAccounting)
+        .then((r) => { if (r.released || r.flagged) logger.warn(r, 'autopilot_stale_reservations_swept'); })
+        .catch((err) => logger.error({ err }, 'autopilot_reservation_sweep_failed'));
+      await sweepExpiredAssets(pool!, autopilotStorage.driver)
+        .catch((err) => logger.error({ err }, 'autopilot_asset_sweep_failed'));
+    };
+    setTimeout(() => void runAutopilotSweeps(), 2 * 60 * 1000);
+    setInterval(() => void runAutopilotSweeps(), 10 * 60 * 1000);
 
     // Fire task reminders every 2 minutes
     void runTaskReminders();
@@ -1160,9 +1219,23 @@ if (config.nodeEnv !== 'test') {
     setTimeout(() => void processMcpMediaSync(pool, decryptIntegrationSecret), 5 * 60 * 1000);
     setInterval(() => void processMcpMediaSync(pool, decryptIntegrationSecret), 6 * 60 * 60 * 1000);
 
-    // Run due auto-content plans (e.g. 3 promo pieces/day) every 10 minutes.
+    // Run due auto-content plans every 2 minutes, so a 20/day plan (a slot every
+    // 72 minutes) runs close to its slot. Ticks never overlap.
     void contentPlanEngine.processDueContentPlans();
-    setInterval(() => void contentPlanEngine.processDueContentPlans(), 10 * 60 * 1000);
+    setInterval(() => void contentPlanEngine.processDueContentPlans(), 2 * 60 * 1000);
+    // AI monitoring: error-rate, latency and spend alerts from the call traces;
+    // plus housekeeping for the response cache, checkpoints and old traces.
+    setInterval(() => void runAIMonitor().catch((err) => logger.warn({ err }, 'ai_monitor_failed')), 5 * 60 * 1000);
+    const aiHousekeeping = () => {
+      void pruneAIResponseCache();
+      void pruneCheckpoints(14);
+      void dbQuery(`DELETE FROM ai_call_traces WHERE created_at < NOW() - INTERVAL '90 days'`).catch(() => undefined);
+    };
+    aiHousekeeping();
+    // Which free NVIDIA models answer this account today: NVIDIA retires them without notice.
+    void refreshNvidiaModels();
+    setInterval(() => void refreshNvidiaModels(), 6 * 60 * 60 * 1000);
+    setInterval(aiHousekeeping, 6 * 60 * 60 * 1000);
 
     // ── AI Sales OS ──
     // Analyse finished conversations every minute — a rep who just logged a

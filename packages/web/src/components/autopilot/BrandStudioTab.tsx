@@ -18,6 +18,7 @@ import {
   Tr,
 } from '../ui';
 import { autopilotService } from '../../services/autopilotService';
+import AutopilotStyleCard from './AutopilotStyleCard';
 
 interface Props {
   onRefreshOverview: () => void;
@@ -293,6 +294,8 @@ export default function BrandStudioTab({ onRefreshOverview }: Props) {
       {scanWarnings.map((w, i) => (
         <Notice key={i} tone="warn" title="Scanner Notice">{w}</Notice>
       ))}
+
+      <AutopilotStyleCard />
 
       {/* Website Brand Intelligence Scanner */}
       <Card>

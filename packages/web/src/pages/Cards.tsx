@@ -137,9 +137,9 @@ const IMAGE_MODELS_BY_PROVIDER: Record<ImageProvider, AIModel[]> = {
     { id: 'google-gemini-nano-pro', label: 'Nano Banana Pro',    desc: 'Pro-grade creative generation',    creditCost: 8,  maxChars: 2000 },
   ],
   openai: [
-    { id: 'dall-e-2',    label: 'DALL·E 2',    desc: 'Fast, affordable generation',          creditCost: 3, maxChars: 1000 },
-    { id: 'dall-e-3',    label: 'DALL·E 3',    desc: 'High quality — vivid or natural style', creditCost: 6, maxChars: 4000, badge: 'Popular' },
-    { id: 'gpt-image-1', label: 'GPT Image 1', desc: 'Best instruction-following, latest',    creditCost: 8, maxChars: 4000, badge: 'NEW' },
+    // Mirrors OPENAI_IMAGE_MODELS in packages/api/src/server/openaiRoutes.ts (checked 2026-10-29).
+    { id: 'gpt-image-2.5-flare',    label: 'GPT Image 2.5 Flare',    desc: 'Fast, high-quality everyday generation', creditCost: 8,  maxChars: 4000, badge: 'NEW' },
+    { id: 'gpt-image-2.5-sunburst', label: 'GPT Image 2.5 Sunburst', desc: 'Most capable; best for text in images',  creditCost: 12, maxChars: 4000 },
   ],
 };
 
@@ -1031,9 +1031,8 @@ function HistoryCard({ design, onDelete }: { design: UserDesign; onDelete: () =>
 // Generation is limited to GPT (OpenAI) and Gemini (Google) models —
 // mirror ENABLED_IMAGE_PROVIDERS when re-enabling other providers.
 const PANEL_IMAGE_MODELS = [
-  { id: 'gpt-image-1',            label: 'GPT Image 1',        tier: 'Quality', credits: 8, desc: 'Best instruction-following', badge: 'Popular' },
-  { id: 'dall-e-3',               label: 'DALL·E 3',           tier: 'Quality', credits: 6, desc: 'High quality — vivid or natural' },
-  { id: 'dall-e-2',               label: 'DALL·E 2',           tier: 'Fast',    credits: 3, desc: 'Fast, affordable generation' },
+  { id: 'gpt-image-2.5-flare',    label: 'GPT Image 2.5 Flare',    tier: 'Fast',    credits: 8,  desc: 'Fast, high-quality everyday generation', badge: 'Popular' },
+  { id: 'gpt-image-2.5-sunburst', label: 'GPT Image 2.5 Sunburst', tier: 'Premium', credits: 12, desc: 'Most capable; best for text in images' },
   { id: 'google-gemini-flash',    label: 'Gemini Flash Image', tier: 'Fast',    credits: 3, desc: 'Fast multimodal generation' },
   { id: 'google-gemini-nano-2',   label: 'Nano Banana 2',      tier: 'Quality', credits: 5, desc: 'Creative image generation', badge: 'NEW' },
   { id: 'google-gemini-nano-pro', label: 'Nano Banana Pro',    tier: 'Premium', credits: 8, desc: 'Pro-grade creative generation' },
@@ -1072,7 +1071,7 @@ function GeneratePanel({
   const [prompt, setPrompt]             = useState(tpl.description || '');
   const [imgToPrompt, setImgToPrompt]   = useState<string | null>(useMode === 'prompt' ? tpl.coverImageUrl : null);
   const [refImage, setRefImage]         = useState<string | null>(useMode === 'ref'    ? tpl.coverImageUrl : null);
-  const [selectedModel, setSelectedModel] = useState<string>(PANEL_IMAGE_MODELS[0].id); // gpt-image-1 default
+  const [selectedModel, setSelectedModel] = useState<string>(PANEL_IMAGE_MODELS[0].id); // gpt-image-2.5-flare default
   const [modelOpen, setModelOpen]       = useState(false);
   const [aspectRatio, setAspectRatio]   = useState('auto');
   const [resolution, setResolution]     = useState<'1k' | '2k' | '4k'>('2k');

@@ -23,38 +23,49 @@ function apiError(status: number, message: string) {
 test('ai errors: real 401 maps to invalid-key message', async () => {
   const classify = await loadClassifier();
   const out = classify('anthropic', 'claude-opus-4-8', apiError(401, '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'));
-  assert.match(out.message, /Invalid Anthropic API key/);
+  assert.match(out.detail, /Invalid Anthropic API key/);
 });
 
 test('ai errors: billing invalid_request_error is NOT reported as a bad key', async () => {
   const classify = await loadClassifier();
   const out = classify('anthropic', 'claude-opus-4-8', apiError(400, '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}'));
-  assert.doesNotMatch(out.message, /Invalid Anthropic API key/);
-  assert.match(out.message, /insufficient credits/i);
+  assert.doesNotMatch(out.detail, /Invalid Anthropic API key/);
+  assert.match(out.detail, /out of credits/i);
 });
 
 test('ai errors: unknown model maps to model message, not key message', async () => {
   const classify = await loadClassifier();
   const out = classify('anthropic', 'claude-nonexistent-9', apiError(404, '404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-nonexistent-9"}}'));
-  assert.doesNotMatch(out.message, /API key/);
-  assert.match(out.message, /Model "claude-nonexistent-9" is not available/);
+  assert.doesNotMatch(out.detail, /API key/);
+  assert.match(out.detail, /Model "claude-nonexistent-9" is not available/);
 });
 
 test('ai errors: generic 400 validation passes through unmangled', async () => {
   const classify = await loadClassifier();
   const original = apiError(400, '400 {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: must be positive"}}');
   const out = classify('anthropic', 'claude-opus-4-8', original);
-  assert.equal(out, original, 'unclassified errors must surface their real message');
+  assert.equal(out.detail, original.message, 'unclassified errors keep their real message for the operator');
 });
 
 test('ai errors: google bad-key message maps to invalid-key', async () => {
   const classify = await loadClassifier();
   const out = classify('google', 'gemini-2.5-pro', new Error('[GoogleGenerativeAI Error] [400 Bad Request] API key not valid. Please pass a valid API key.'));
-  assert.match(out.message, /Invalid Google API key/);
+  assert.match(out.detail, /Invalid Google API key/);
 });
 
 test('ai errors: 429 maps to rate-limit guidance', async () => {
   const classify = await loadClassifier();
   const out = classify('anthropic', 'claude-opus-4-8', apiError(429, '429 rate_limit_error'));
-  assert.match(out.message, /rate limit/i);
+  assert.match(out.detail, /rate limit/i);
+  assert.match(out.message, /busy right now/);
+});
+
+test('ai errors: customers never see setup detail, admins do', async () => {
+  const mod = await import('../src/ai-helpers.ts');
+  const out = mod.classifyAIProviderError('anthropic', 'claude-opus-4-8', apiError(400, 'Your credit balance is too low to access the Anthropic API.'));
+  for (const shown of [out.message, mod.aiErrorFor(out, 'user'), mod.aiErrorFor(new Error('relation "x" does not exist'), undefined)]) {
+    assert.equal(shown, mod.AI_UNAVAILABLE_MESSAGE);
+    assert.doesNotMatch(shown, /Admin|Anthropic|credits|key/i);
+  }
+  assert.match(mod.aiErrorFor(out, 'admin'), /out of credits/);
 });

@@ -23,10 +23,14 @@ import {
   Settings,
 } from 'lucide-react';
 import NotificationBell from './components/NotificationBell';
+import CreditBadge from './components/CreditBadge';
 import OnboardingWizard from './components/OnboardingWizard';
 import { onboardingService } from './services/onboardingService';
 import PageTour, { PAGE_GUIDES } from './components/PageTour';
 import GuidedTour, { SYSTEM_TOUR_STEPS, TourStep as GuidedTourStep } from './components/GuidedTour';
+import TourHost from './components/tour/TourHost';
+import { MARKETING_TOURS } from './components/tour/marketingTours';
+import { startTour } from './components/tour/tourCore';
 import AdvancedTemplateCardModal from './components/TemplateEditorHost';
 import HelpModal from './components/HelpModal';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -808,7 +812,7 @@ function AppSidebar({
 
           {/* Marketing */}
           {navOn('marketing') && (
-            <>
+            <div data-tour="nav-marketing">
               <div className={cls(MARKETING_PAGES.includes(currentPage))}>
                 <button
                   type="button"
@@ -916,7 +920,7 @@ function AppSidebar({
                     ))}
                 </div>
               )}
-            </>
+            </div>
           )}
 
           {navOn('integrations') && matches('Integrations') && (
@@ -1706,6 +1710,7 @@ function App() {
                     Overview
                   </button>
                 )}
+                <CreditBadge onOpen={() => navigateToPage('credits')} />
                 <NotificationBell />
                 <span className="os-topbar-date">
                   {new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date())}
@@ -1747,7 +1752,12 @@ function App() {
             pageTitle={guide.title}
             forceStart={pendingTour}
             onForceStartConsumed={() => setPendingTour(false)}
-            onStartInteractiveTour={() => startPageTour(guide.steps as any, guide.title)}
+            onStartInteractiveTour={() => {
+              // Marketing pages have real guided tours; other pages keep their walkthrough.
+              const marketingTour = Object.values(MARKETING_TOURS).find((t) => t.page === currentPage);
+              if (marketingTour) startTour(marketingTour.id);
+              else startPageTour(guide.steps as any, guide.title);
+            }}
             onStartSystemTour={startSystemTour}
           />
         )}
@@ -1761,6 +1771,8 @@ function App() {
             onDismiss={() => setShowOnboarding(false)}
           />
         )}
+        {/* Guided tours of the marketing tools (DakyX-style: one short tour per tool) */}
+        <TourHost tours={MARKETING_TOURS} page={currentPage} userId={authUser?.id ? String(authUser.id) : null} paused={showOnboarding || systemTourOpen} onNavigate={(p) => navigateToPage(p as PageType)} />
         {/* System & Interactive Guided Tour */}
         <GuidedTour
           isOpen={systemTourOpen}

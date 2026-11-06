@@ -11,8 +11,8 @@ type LeadsDeps = {
   requireAuth: (req: Request, res: Response) => AuthResult;
   pool: Pool;
   frontendUrl: string;
-  gsClientId: string;
-  gsClientSecret: string;
+  // Read per request so a change in Admin → Integrations → Google Sheets takes effect without a restart.
+  getGsCredentials: () => Promise<{ clientId: string; clientSecret: string }>;
   gsRedirect: string;
 };
 
@@ -36,7 +36,7 @@ async function gsRefreshToken(pool: Pool, userId: string, clientId: string, clie
   return data.access_token;
 }
 
-export function registerLeadsRoutes({ requireAuth, pool, frontendUrl, gsClientId, gsClientSecret, gsRedirect }: LeadsDeps): Router {
+export function registerLeadsRoutes({ requireAuth, pool, frontendUrl, getGsCredentials, gsRedirect }: LeadsDeps): Router {
   const router = express.Router();
 
   // POST /api/leads/parse-excel
@@ -206,7 +206,8 @@ export function registerLeadsRoutes({ requireAuth, pool, frontendUrl, gsClientId
   router.get('/google-sheets/connect', async (req: Request, res: Response) => {
     try {
       const auth = requireAuth(req, res); if (!auth) return;
-      if (!gsClientId || !gsClientSecret) return res.status(500).json({ success: false, error: 'Google Sheets OAuth not configured. Set GOOGLE_SHEETS_CLIENT_ID and GOOGLE_SHEETS_CLIENT_SECRET.' });
+      const { clientId: gsClientId, clientSecret: gsClientSecret } = await getGsCredentials();
+      if (!gsClientId || !gsClientSecret) return res.status(500).json({ success: false, error: 'Google Sheets OAuth not configured. Add the client ID and secret in Admin → Integrations → Google Sheets.' });
       const state = randomBytes(20).toString('hex');
       gsOAuthState.set(state, { userId: auth.userId, expiry: Date.now() + 600_000 });
       const params = new URLSearchParams({
@@ -244,6 +245,7 @@ export function registerLeadsRoutes({ requireAuth, pool, frontendUrl, gsClientId
       const stored = gsOAuthState.get(state);
       if (!stored || stored.expiry < Date.now()) return res.send(popupHtml('error', 'Invalid or expired session. Please try again.'));
       gsOAuthState.delete(state);
+      const { clientId: gsClientId, clientSecret: gsClientSecret } = await getGsCredentials();
       const tokRes = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -287,6 +289,7 @@ export function registerLeadsRoutes({ requireAuth, pool, frontendUrl, gsClientId
   router.get('/google-sheets/files', async (req: Request, res: Response) => {
     try {
       const auth = requireAuth(req, res); if (!auth) return;
+      const { clientId: gsClientId, clientSecret: gsClientSecret } = await getGsCredentials();
       const token = await gsRefreshToken(pool, auth.userId, gsClientId, gsClientSecret);
       const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=mimeType%3D'application%2Fvnd.google-apps.spreadsheet'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime+desc&pageSize=50`, { headers: { Authorization: `Bearer ${token}` } });
       const data = await r.json() as { files?: { id: string; name: string; modifiedTime: string }[] };
@@ -298,6 +301,7 @@ export function registerLeadsRoutes({ requireAuth, pool, frontendUrl, gsClientId
   router.get('/google-sheets/files/:fileId/sheets', async (req: Request, res: Response) => {
     try {
       const auth = requireAuth(req, res); if (!auth) return;
+      const { clientId: gsClientId, clientSecret: gsClientSecret } = await getGsCredentials();
       const token = await gsRefreshToken(pool, auth.userId, gsClientId, gsClientSecret);
       const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${req.params.fileId}?fields=sheets.properties(sheetId,title)`, { headers: { Authorization: `Bearer ${token}` } });
       const data = await r.json() as { sheets?: { properties: { sheetId: number; title: string } }[] };
@@ -326,6 +330,7 @@ export function registerLeadsRoutes({ requireAuth, pool, frontendUrl, gsClientId
       const { rows: [grp] } = await pool.query(`SELECT * FROM lead_groups WHERE id=$1 AND user_id=$2`, [req.params.id, auth.userId]);
       if (!grp) return res.status(404).json({ success: false, error: 'Group not found' });
       if (!grp.linked_sheet_id || !grp.linked_sheet_tab) return res.status(400).json({ success: false, error: 'No Google Sheet linked to this group' });
+      const { clientId: gsClientId, clientSecret: gsClientSecret } = await getGsCredentials();
       const token = await gsRefreshToken(pool, auth.userId, gsClientId, gsClientSecret);
       const range = encodeURIComponent(grp.linked_sheet_tab);
       const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${grp.linked_sheet_id}/values/${range}`, { headers: { Authorization: `Bearer ${token}` } });
@@ -358,13 +363,14 @@ export function registerLeadsRoutes({ requireAuth, pool, frontendUrl, gsClientId
 }
 
 // Separate router for /api/google-sheets/* (legacy URL prefix)
-export function registerGoogleSheetsRoutes({ requireAuth, pool, frontendUrl, gsClientId, gsClientSecret, gsRedirect }: LeadsDeps): Router {
+export function registerGoogleSheetsRoutes({ requireAuth, pool, frontendUrl, getGsCredentials, gsRedirect }: LeadsDeps): Router {
   const router = express.Router();
 
   router.get('/connect', async (req: Request, res: Response) => {
     try {
       const auth = requireAuth(req, res); if (!auth) return;
-      if (!gsClientId || !gsClientSecret) return res.status(500).json({ success: false, error: 'Google Sheets OAuth not configured. Set GOOGLE_SHEETS_CLIENT_ID and GOOGLE_SHEETS_CLIENT_SECRET.' });
+      const { clientId: gsClientId, clientSecret: gsClientSecret } = await getGsCredentials();
+      if (!gsClientId || !gsClientSecret) return res.status(500).json({ success: false, error: 'Google Sheets OAuth not configured. Add the client ID and secret in Admin → Integrations → Google Sheets.' });
       const state = randomBytes(20).toString('hex');
       gsOAuthState.set(state, { userId: auth.userId, expiry: Date.now() + 600_000 });
       const params = new URLSearchParams({
@@ -401,6 +407,7 @@ export function registerGoogleSheetsRoutes({ requireAuth, pool, frontendUrl, gsC
       const stored = gsOAuthState.get(state);
       if (!stored || stored.expiry < Date.now()) return res.send(popupHtml('error', 'Invalid or expired session. Please try again.'));
       gsOAuthState.delete(state);
+      const { clientId: gsClientId, clientSecret: gsClientSecret } = await getGsCredentials();
       const tokRes = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -441,6 +448,7 @@ export function registerGoogleSheetsRoutes({ requireAuth, pool, frontendUrl, gsC
   router.get('/files', async (req: Request, res: Response) => {
     try {
       const auth = requireAuth(req, res); if (!auth) return;
+      const { clientId: gsClientId, clientSecret: gsClientSecret } = await getGsCredentials();
       const token = await gsRefreshToken(pool, auth.userId, gsClientId, gsClientSecret);
       const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=mimeType%3D'application%2Fvnd.google-apps.spreadsheet'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime+desc&pageSize=50`, { headers: { Authorization: `Bearer ${token}` } });
       const data = await r.json() as { files?: { id: string; name: string; modifiedTime: string }[] };
@@ -451,6 +459,7 @@ export function registerGoogleSheetsRoutes({ requireAuth, pool, frontendUrl, gsC
   router.get('/files/:fileId/sheets', async (req: Request, res: Response) => {
     try {
       const auth = requireAuth(req, res); if (!auth) return;
+      const { clientId: gsClientId, clientSecret: gsClientSecret } = await getGsCredentials();
       const token = await gsRefreshToken(pool, auth.userId, gsClientId, gsClientSecret);
       const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${req.params.fileId}?fields=sheets.properties(sheetId,title)`, { headers: { Authorization: `Bearer ${token}` } });
       const data = await r.json() as { sheets?: { properties: { sheetId: number; title: string } }[] };

@@ -1,4 +1,5 @@
 import express from 'express';
+import { creditsForMagnific, magnificAudioCost, magnificEditCost, magnificImageCost, magnificLipSyncCost, magnificOneCost, magnificVideoCost } from './aiPricing.ts';
 import type { Router, Response } from 'express';
 import type { Request } from '../types/http.ts';
 import { randomUUID } from 'crypto';
@@ -7,6 +8,9 @@ import { logger } from '../logger.ts';
 import { recordAuditLog } from '../link-metadata.ts';
 import { encryptPlatformConfig, decryptPlatformConfig } from '../integration-helpers.ts';
 import { chargeAICredits } from '../ai-helpers.ts';
+import { getBackendPublicUrl } from '../platform-helpers.ts';
+import { config } from '../config.ts';
+import { durableMediaUrl, durableMediaUrls } from './mediaStore.ts';
 import { callMagnificMcpTool } from './mcpRoutes.ts';
 
 type AuthResult = { userId: string; role?: string } | null;
@@ -43,6 +47,9 @@ export const ASPECT_TO_WH: Record<string, { width: number; height: number }> = {
   'cinematic_21_9':    { width: 1024, height: 448 },
   'portrait_2_3':      { width: 768,  height: 1152 },
   'standard_3_2':      { width: 1024, height: 683 },
+  'social_post_4_5':   { width: 1024, height: 1280 },
+  'horizontal_2_1':    { width: 1280, height: 640 },
+  'vertical_1_2':      { width: 640,  height: 1280 },
 };
 
 export const MAGNIFIC_ONE_ASPECT_RATIOS = new Set([
@@ -56,15 +63,15 @@ export const MAGNIFIC_ONE_8TILE_EXACT_RATIOS = new Set(['1:1', '2:3', '3:2', '3:
 export const MAGNIFIC_IMAGE_MODELS: Record<string, {
   endpoint: string;
   pollPath: (id: string) => string;
-  bodyType: 'magnific_one' | 'aspect_ratio' | 'image_size' | 'width_height';
+  bodyType: 'magnific_one' | 'aspect_ratio' | 'image_size' | 'width_height' | 'z_image' | 'nano_banana';
   credits: number;
   label?: string;
   tier?: 'flagship' | 'premium' | 'quality' | 'fast';
 }> = {
   'magnific-one':          { endpoint: '/v1/ai/magnific-one',                                    pollPath: (id) => `/v1/ai/magnific-one/${id}`,                                    bodyType: 'magnific_one',  credits: 6, label: 'Magnific One (Art-Directed 4K & Draft Sheets)', tier: 'flagship' },
-  'nano-banana-pro':       { endpoint: '/v1/ai/text-to-image/nano-banana-pro',                  pollPath: (id) => `/v1/ai/text-to-image/nano-banana-pro/${id}`,                  bodyType: 'aspect_ratio',  credits: 4, label: 'Nano Banana Pro (Product Text, Sketches & Edits)', tier: 'flagship' },
-  'nano-banana-2':         { endpoint: '/v1/ai/text-to-image/nano-banana-2',                    pollPath: (id) => `/v1/ai/text-to-image/nano-banana-2/${id}`,                    bodyType: 'aspect_ratio',  credits: 4, label: 'Nano Banana 2 (4K Character Sheets & Mockups)', tier: 'flagship' },
-  'nano-banana-pro-flash': { endpoint: '/v1/ai/text-to-image/nano-banana-pro-flash',            pollPath: (id) => `/v1/ai/text-to-image/nano-banana-pro-flash/${id}`,            bodyType: 'aspect_ratio',  credits: 3, label: 'Nano Banana Pro Flash',                        tier: 'fast' },
+  'nano-banana-pro':       { endpoint: '/v1/ai/text-to-image/nano-banana-pro',                  pollPath: (id) => `/v1/ai/text-to-image/nano-banana-pro/${id}`,                  bodyType: 'nano_banana',  credits: 4, label: 'Nano Banana Pro (Product Text, Sketches & Edits)', tier: 'flagship' },
+  'nano-banana-2':         { endpoint: '/v1/ai/text-to-image/nano-banana-2',                    pollPath: (id) => `/v1/ai/text-to-image/nano-banana-2/${id}`,                    bodyType: 'nano_banana',  credits: 4, label: 'Nano Banana 2 (4K Character Sheets & Mockups)', tier: 'flagship' },
+  'nano-banana-pro-flash': { endpoint: '/v1/ai/text-to-image/nano-banana-pro-flash',            pollPath: (id) => `/v1/ai/text-to-image/nano-banana-pro-flash/${id}`,            bodyType: 'nano_banana',  credits: 3, label: 'Nano Banana Pro Flash',                        tier: 'fast' },
   'mystic':                { endpoint: '/v1/ai/mystic',                                          pollPath: (id) => `/v1/ai/mystic/${id}`,                                          bodyType: 'aspect_ratio',  credits: 8, label: 'Mystic (Ultra-Realistic)',                     tier: 'premium' },
   'flux-kontext-pro':      { endpoint: '/v1/ai/text-to-image/flux-kontext-pro',                 pollPath: (id) => `/v1/ai/text-to-image/flux-kontext-pro/${id}`,                 bodyType: 'aspect_ratio',  credits: 5, label: 'Flux Kontext Pro',                             tier: 'quality' },
   'flux-2-pro':            { endpoint: '/v1/ai/text-to-image/flux-2-pro',                       pollPath: (id) => `/v1/ai/text-to-image/flux-2-pro/${id}`,                       bodyType: 'width_height',  credits: 5, label: 'Flux 2 Pro',                                   tier: 'quality' },
@@ -78,7 +85,7 @@ export const MAGNIFIC_IMAGE_MODELS: Record<string, {
   'seedream-v4':           { endpoint: '/v1/ai/text-to-image/seedream-v4',                      pollPath: (id) => `/v1/ai/text-to-image/seedream-v4/${id}`,                      bodyType: 'aspect_ratio',  credits: 5, label: 'Seedream 4',                                   tier: 'quality' },
   'runway-t2i':            { endpoint: '/v1/ai/text-to-image/runway',                           pollPath: (id) => `/v1/ai/text-to-image/runway/${id}`,                           bodyType: 'aspect_ratio',  credits: 5, label: 'RunWay Text-to-Image',                         tier: 'quality' },
   'gemini-flash':          { endpoint: '/v1/ai/text-to-image/gemini-2-5-flash-image-preview',   pollPath: (id) => `/v1/ai/text-to-image/gemini-2-5-flash-image-preview/${id}`,   bodyType: 'aspect_ratio',  credits: 6, label: 'Gemini 2.5 Flash Image',                       tier: 'quality' },
-  'z-image':               { endpoint: '/v1/ai/text-to-image/z-image',                          pollPath: (id) => `/v1/ai/text-to-image/z-image/${id}`,                          bodyType: 'aspect_ratio',  credits: 2, label: 'Z-Image Turbo',                                tier: 'fast' },
+  'z-image':               { endpoint: '/v1/ai/text-to-image/z-image',                          pollPath: (id) => `/v1/ai/text-to-image/z-image/${id}`,                          bodyType: 'z_image',  credits: 2, label: 'Z-Image Turbo',                                tier: 'fast' },
 };
 
 export const MAGNIFIC_VIDEO_MODELS: Record<string, {
@@ -114,16 +121,107 @@ export const MAGNIFIC_VIDEO_MODELS: Record<string, {
   'happy-horse-i2v':         { endpoint: '/v1/ai/image-to-video/happy-horse-1',           pollPath: (id) => `/v1/ai/image-to-video/happy-horse-1/${id}`,           credits: 20, label: 'Happy Horse I2V',                                                    supportsI2V: true,  supportsAudio: false },
 };
 
+// Magnific's size names (docs.magnific.com, text-to-image endpoints). 9:16 is
+// "social_story_9_16" and 3:4 "traditional_3_4" — the "portrait_*" names are
+// Z-Image's image_size values and are rejected by the aspect_ratio endpoints.
 export const ASPECT_RATIO_MAP: Record<string, string> = {
   '1:1':   'square_1_1',
   '16:9':  'widescreen_16_9',
-  '9:16':  'portrait_9_16',
+  '9:16':  'social_story_9_16',
   '4:3':   'classic_4_3',
-  '3:4':   'portrait_3_4',
+  '3:4':   'traditional_3_4',
   '21:9':  'cinematic_21_9',
   '2:3':   'portrait_2_3',
   '3:2':   'standard_3_2',
+  '4:5':   'social_post_4_5',
+  '2:1':   'horizontal_2_1',
+  '1:2':   'vertical_1_2',
 };
+
+/** Width ÷ height of every size name and "W:H" ratio the app uses. */
+const SIZE_RATIO: Record<string, number> = {
+  square_1_1: 1, square: 1, square_hd: 1,
+  widescreen_16_9: 16 / 9, landscape_16_9: 16 / 9,
+  social_story_9_16: 9 / 16, portrait_9_16: 9 / 16,
+  classic_4_3: 4 / 3, landscape_4_3: 4 / 3,
+  traditional_3_4: 3 / 4, portrait_3_4: 3 / 4,
+  cinematic_21_9: 21 / 9, portrait_2_3: 2 / 3, standard_3_2: 3 / 2,
+  horizontal_2_1: 2, vertical_1_2: 0.5, social_post_4_5: 0.8, social_5_4: 1.25,
+};
+
+/** "4:5" → 0.8; a size name → its ratio; null when unknown. */
+export function ratioValue(raw: string): number | null {
+  const r = String(raw || '').trim();
+  if (SIZE_RATIO[r] !== undefined) return SIZE_RATIO[r];
+  const m = r.match(/^(\d+(?:\.\d+)?)\s*[:x/]\s*(\d+(?:\.\d+)?)$/);
+  return m && Number(m[2]) > 0 ? Number(m[1]) / Number(m[2]) : null;
+}
+
+/** The option whose shape is closest to the wanted ratio (compared on a log scale, so 4:5 → 3:4, not 1:1). */
+function nearestSize(raw: string, options: readonly string[]): string {
+  const want = ratioValue(raw) ?? ratioValue(ASPECT_RATIO_MAP[raw] ?? '') ?? 1;
+  let best = options[0];
+  let gap = Infinity;
+  for (const o of options) {
+    const v = ratioValue(o);
+    if (v === null) continue;
+    const d = Math.abs(Math.log(v) - Math.log(want));
+    if (d < gap) { gap = d; best = o; }
+  }
+  return best;
+}
+
+// aspect_ratio values each text-to-image endpoint accepts (docs.magnific.com).
+const COMMON_ASPECTS = ['square_1_1', 'widescreen_16_9', 'social_story_9_16', 'portrait_2_3', 'traditional_3_4', 'standard_3_2', 'classic_4_3'] as const;
+const MODEL_ASPECTS: Record<string, readonly string[]> = {
+  'flux-dev': [...COMMON_ASPECTS, 'horizontal_2_1', 'vertical_1_2', 'social_post_4_5'],
+  'seedream-v4-5': [...COMMON_ASPECTS, 'cinematic_21_9'],
+};
+
+/** A valid aspect_ratio name for this image model: the exact one when it takes it, else the closest it does. */
+export function magnificAspectFor(modelId: string, ratio: string): string {
+  const allowed = MODEL_ASPECTS[modelId] ?? COMMON_ASPECTS;
+  const wanted = ASPECT_RATIO_MAP[ratio] ?? ratio;
+  return allowed.includes(wanted) ? wanted : nearestSize(ratio, allowed);
+}
+
+/** Z-Image takes image_size, not aspect_ratio. */
+const Z_IMAGE_SIZES = ['square_hd', 'portrait_3_4', 'portrait_9_16', 'landscape_4_3', 'landscape_16_9'] as const;
+export function zImageSizeFor(ratio: string): string { return nearestSize(ratio, Z_IMAGE_SIZES); }
+
+/** Kling 2.x image/text-to-video aspect_ratio: only these three. */
+const KLING_ASPECTS = ['widescreen_16_9', 'social_story_9_16', 'square_1_1'] as const;
+export function klingAspectFor(ratio: string): string { return nearestSize(ratio, KLING_ASPECTS); }
+
+/**
+ * Nano Banana (Gemini image) models take a plain "W:H" aspect_ratio, an upper-case
+ * resolution ("1K" | "2K" | "4K") and reference images as {image, mime_type} objects
+ * (docs.magnific.com, Nano Banana Pro text-to-image).
+ */
+const NANO_BANANA_RATIOS = ['1:1', '2:3', '3:2', '4:3', '3:4', '5:4', '4:5', '16:9', '9:16', '21:9'] as const;
+export function nanoBananaRatioFor(ratio: string): string { return nearestSize(ratio || '1:1', NANO_BANANA_RATIOS); }
+export function nanoBananaResolution(raw: unknown): '1K' | '2K' | '4K' | null {
+  const r = String(raw ?? '').trim().toUpperCase();
+  return r === '1K' || r === '2K' || r === '4K' ? r : null;
+}
+function imageMimeFor(url: string): 'image/png' | 'image/webp' | 'image/jpeg' {
+  const path = url.split(/[?#]/)[0].toLowerCase();
+  if (path.endsWith('.png') || url.startsWith('data:image/png')) return 'image/png';
+  if (path.endsWith('.webp') || url.startsWith('data:image/webp')) return 'image/webp';
+  return 'image/jpeg';
+}
+/** The request body a Nano Banana model accepts. */
+export function nanoBananaBody(prompt: string, aspectRatio: string, opts: { reference_images?: string[]; resolution?: string } = {}): Record<string, unknown> {
+  const body: Record<string, unknown> = { prompt, aspect_ratio: nanoBananaRatioFor(aspectRatio) };
+  const resolution = nanoBananaResolution(opts.resolution);
+  if (resolution) body.resolution = resolution;
+  const refs = (opts.reference_images ?? []).filter((u) => typeof u === 'string' && u.trim()).slice(0, 14);
+  if (refs.length) body.reference_images = refs.map((image) => ({ image, mime_type: imageMimeFor(image) }));
+  return body;
+}
+
+/** Models whose endpoint takes no reference_images / resolution fields (sending them is refused). */
+const NO_REFERENCE_MODELS = new Set(['z-image', 'flux-dev']);
 
 export const REVERSE_ASPECT_RATIO_MAP: Record<string, string> = {
   'square_1_1':        '1:1',
@@ -136,6 +234,9 @@ export const REVERSE_ASPECT_RATIO_MAP: Record<string, string> = {
   'cinematic_21_9':    '21:9',
   'portrait_2_3':      '2:3',
   'standard_3_2':      '3:2',
+  'social_post_4_5':   '4:5',
+  'horizontal_2_1':    '2:1',
+  'vertical_1_2':      '1:2',
 };
 
 export const FREEPIK_IMAGE_MODELS: Record<string, { credits: number; type: 'async' }> = {
@@ -184,17 +285,84 @@ export async function getFreepikApiKey(pool: Pool | null): Promise<string> {
   return getMagnificApiKey(pool);
 }
 
+// ── Webhooks ──────────────────────────────────────────────────────────────────
+// Magnific signs each task callback with the secret issued next to the API key
+// (magnific.com → API keys). Admin-configured secret wins; env is fallback only.
+
+export async function getMagnificWebhookSecret(pool: Pool | null): Promise<string> {
+  try {
+    const cfg = await pool!.query(`SELECT config FROM platform_configs WHERE platform = 'magnific' LIMIT 1`);
+    const dbSecret: string = decryptPlatformConfig(cfg.rows[0]?.config)?.webhookSecret ?? '';
+    if (dbSecret) return dbSecret;
+  } catch (_err) { /* fall through to env */ }
+  return process.env.MAGNIFIC_WEBHOOK_SECRET || '';
+}
+
+export function magnificWebhookUrl(): string {
+  const base = (getBackendPublicUrl() || config.appUrl).replace(/\/$/, '');
+  return base ? `${base}/webhooks/magnific` : '';
+}
+
+// The callback URL magnificPost attaches to every task. Empty until a secret
+// exists, since an unverifiable callback is discarded anyway. Polling stays the
+// primary path either way. Re-read every 5 minutes, and at once on an admin save.
+let webhookTarget = '';
+let webhookPool: Pool | null = null;
+let webhookCheckedAt = 0;
+export async function refreshMagnificWebhookTarget(pool: Pool | null): Promise<void> {
+  webhookPool = pool;
+  webhookCheckedAt = Date.now();
+  webhookTarget = (await getMagnificWebhookSecret(pool)) ? magnificWebhookUrl() : '';
+}
+async function currentWebhookTarget(): Promise<string> {
+  if (Date.now() - webhookCheckedAt > 5 * 60_000) await refreshMagnificWebhookTarget(webhookPool);
+  return webhookTarget;
+}
+
+/** Result URLs from a task body, shared by polling and the webhook. */
+export function magnificTaskUrls(data: any): string[] {
+  const rawGen = data?.generated ?? data?.output ?? (data?.output_url ? [data.output_url] : data?.url ? [data.url] : data?.audio_url ? [data.audio_url] : []);
+  return (Array.isArray(rawGen) ? rawGen : [rawGen])
+    .map((item: any) => (typeof item === 'string' ? item : item?.url ?? item?.audio_url ?? item?.video_url ?? ''))
+    .filter(Boolean);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Retry-After in ms (seconds or HTTP date), capped; null when absent. */
+function retryAfterMs(headers: any, capMs: number): number | null {
+  const raw = headers?.['retry-after'];
+  if (raw == null) return null;
+  const secs = Number(raw);
+  const ms = Number.isFinite(secs) ? secs * 1000 : Date.parse(String(raw)) - Date.now();
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, capMs) : null;
+}
+
+// 429 and 503 mean the task was not created, so resubmitting cannot start (and
+// bill) it twice. Other failures, including a network error mid-request where
+// the task may already exist, are returned as before for the caller to report.
+const MAGNIFIC_SUBMIT_RETRY_STATUSES = new Set([429, 503]);
+export const MAGNIFIC_SUBMIT_MAX_ATTEMPTS = 4;
+
 export async function magnificPost(path: string, body: object, apiKey: string) {
-  return axios.post(`${MAGNIFIC_BASE}${path}`, body, {
-    headers: proxyHeaders({
-      'x-magnific-api-key': apiKey,
-      'Content-Type': 'application/json',
-      'Origin': 'https://app.magnific.com',
-      'Referer': 'https://app.magnific.com/',
-    }),
-    validateStatus: () => true,
-    timeout: 20000,
-  });
+  const target = await currentWebhookTarget();
+  if (target && !('webhook_url' in body)) body = { ...body, webhook_url: target };
+  for (let attempt = 1; ; attempt++) {
+    const res = await axios.post(`${MAGNIFIC_BASE}${path}`, body, {
+      headers: proxyHeaders({
+        'x-magnific-api-key': apiKey,
+        'Content-Type': 'application/json',
+        'Origin': 'https://app.magnific.com',
+        'Referer': 'https://app.magnific.com/',
+      }),
+      validateStatus: () => true,
+      timeout: 20000,
+    });
+    if (!MAGNIFIC_SUBMIT_RETRY_STATUSES.has(res.status) || attempt >= MAGNIFIC_SUBMIT_MAX_ATTEMPTS) return res;
+    const wait = retryAfterMs(res.headers, 30_000) ?? 1000 * 2 ** attempt + Math.floor(Math.random() * 500);
+    logger.warn({ path, status: res.status, attempt, waitMs: wait }, 'magnific_submit_retry');
+    await sleep(wait);
+  }
 }
 
 export async function pollMagnificTask(
@@ -203,33 +371,51 @@ export async function pollMagnificTask(
   maxSeconds = 120,
   onProgress?: (status: string) => void
 ): Promise<{ url: string | null; urls?: string[]; error: string | null }> {
-  const deadline = Date.now() + maxSeconds * 1000;
+  const started = Date.now();
+  const deadline = started + maxSeconds * 1000;
+  let lastProblem = '';
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 3000));
-    const r = await axios.get(`${MAGNIFIC_BASE}${taskPath}`, {
-      headers: proxyHeaders({
-        'x-magnific-api-key': apiKey,
-        'Origin': 'https://app.magnific.com',
-        'Referer': 'https://app.magnific.com/',
-      }),
-      validateStatus: () => true,
-      timeout: 12000,
-    });
+    // Quick early checks for fast models; slower ones for long video renders.
+    const elapsed = Date.now() - started;
+    await sleep(elapsed < 30_000 ? 3000 : elapsed < 120_000 ? 5000 : 8000);
+    let r;
+    try {
+      r = await axios.get(`${MAGNIFIC_BASE}${taskPath}`, {
+        headers: proxyHeaders({
+          'x-magnific-api-key': apiKey,
+          'Origin': 'https://app.magnific.com',
+          'Referer': 'https://app.magnific.com/',
+        }),
+        validateStatus: () => true,
+        timeout: 12000,
+      });
+    } catch (err: any) {
+      // The task keeps running (and is billed) whether or not one status check
+      // gets through, so a network blip must not fail it.
+      lastProblem = `network error (${err?.code || err?.message || 'unknown'})`;
+      continue;
+    }
+    if (r.status === 401 || r.status === 403) {
+      return { url: null, urls: [], error: sanitizeMagnificError(`HTTP ${r.status}: ${r.data?.message ?? 'not authorised to read this task'}`) };
+    }
+    if (r.status === 429 || r.status >= 500) {
+      lastProblem = `HTTP ${r.status}`;
+      const wait = retryAfterMs(r.headers, 20_000);
+      if (wait) await sleep(wait);
+      continue;
+    }
     const data = r.data?.data ?? r.data;
     const status: string = String(data?.status ?? '').toUpperCase();
     onProgress?.(status);
     if (status === 'COMPLETED' || status === 'SUCCEEDED' || status === 'DONE') {
-      const rawGen = data?.generated ?? data?.output ?? (data?.output_url ? [data.output_url] : data?.url ? [data.url] : data?.audio_url ? [data.audio_url] : []);
-      const urls: string[] = (Array.isArray(rawGen) ? rawGen : [rawGen])
-        .map((item: any) => (typeof item === 'string' ? item : item?.url ?? item?.audio_url ?? item?.video_url ?? ''))
-        .filter(Boolean);
+      const urls = magnificTaskUrls(data);
       return { url: urls[0] ?? null, urls, error: null };
     }
     if (status === 'FAILED' || status === 'ERROR') {
       return { url: null, urls: [], error: data?.error ?? data?.message ?? 'Generation failed' };
     }
   }
-  return { url: null, urls: [], error: 'Timeout: generation took too long' };
+  return { url: null, urls: [], error: `Timeout: generation took too long${lastProblem ? ` (last status check: ${lastProblem})` : ''}` };
 }
 
 export interface MagnificOneOptions {
@@ -241,6 +427,15 @@ export interface MagnificOneOptions {
   tiles?: 8 | 16;
   reference_images?: string[];
   webhook_url?: string;
+}
+
+// `.credits` on the model tables is what a default call costs the customer,
+// derived from Magnific's real price × 1.54 (server/aiPricing.ts).
+for (const key of Object.keys(MAGNIFIC_IMAGE_MODELS)) {
+  Object.defineProperty(MAGNIFIC_IMAGE_MODELS[key], 'credits', { get: () => creditsForMagnific(magnificImageCost(key)), enumerable: true, configurable: true });
+}
+for (const key of Object.keys(MAGNIFIC_VIDEO_MODELS)) {
+  Object.defineProperty(MAGNIFIC_VIDEO_MODELS[key], 'credits', { get: () => creditsForMagnific(magnificVideoCost(key)), enumerable: true, configurable: true });
 }
 
 /**
@@ -265,7 +460,9 @@ export async function magnificOneGenerate(
 }> {
   const mode: 'quality' | 'draft' = opts.mode === 'draft' ? 'draft' : 'quality';
   const rawRatio = String(opts.aspect_ratio || '1:1').trim();
-  const normalizedRatio = REVERSE_ASPECT_RATIO_MAP[rawRatio] ?? (MAGNIFIC_ONE_ASPECT_RATIOS.has(rawRatio) ? rawRatio : '1:1');
+  // Not one of Magnific One's ratios (e.g. Instagram's 4:5): the closest one (4:5 → 3:4), not a square.
+  const mapped = REVERSE_ASPECT_RATIO_MAP[rawRatio] ?? rawRatio;
+  const normalizedRatio = MAGNIFIC_ONE_ASPECT_RATIOS.has(mapped) ? mapped : nearestSize(mapped, [...MAGNIFIC_ONE_ASPECT_RATIOS]);
 
   const body: Record<string, unknown> = {
     prompt: String(opts.prompt || '').trim().slice(0, 2000),
@@ -374,21 +571,29 @@ export async function magnificGenerateImage(
   }
 
   const mappedAspect = ASPECT_RATIO_MAP[aspectRatio] ?? aspectRatio ?? 'square_1_1';
+  const resolvedModel = MAGNIFIC_IMAGE_MODELS[modelId] ? modelId : 'flux-2-turbo';
   let body: Record<string, any>;
-  if (cfg.bodyType === 'image_size') {
+  if (cfg.bodyType === 'nano_banana') {
+    body = nanoBananaBody(prompt, aspectRatio || '1:1', { reference_images: extraOpts?.reference_images, resolution: extraOpts?.resolution });
+  } else if (cfg.bodyType === 'z_image') {
+    body = { prompt, image_size: zImageSizeFor(aspectRatio || '1:1'), output_format: 'jpeg' };
+  } else if (cfg.bodyType === 'image_size') {
     const wh = ASPECT_TO_WH[mappedAspect] ?? { width: 1024, height: 1024 };
     body = { prompt, image_size: wh, guidance_scale: 2.5, output_format: 'jpeg' };
   } else if (cfg.bodyType === 'width_height') {
     const wh = ASPECT_TO_WH[mappedAspect] ?? { width: 1024, height: 768 };
     body = { prompt, width: wh.width, height: wh.height };
   } else {
-    body = { prompt, aspect_ratio: mappedAspect };
+    body = { prompt, aspect_ratio: magnificAspectFor(resolvedModel, aspectRatio || '1:1') };
   }
-  if (Array.isArray(extraOpts?.reference_images) && extraOpts.reference_images.length > 0) {
-    body.reference_images = extraOpts.reference_images.slice(0, 10);
-  }
-  if (extraOpts?.resolution) {
-    body.resolution = extraOpts.resolution;
+  // Only endpoints that take them get reference images / a resolution (the others refuse the request).
+  if (!NO_REFERENCE_MODELS.has(resolvedModel) && cfg.bodyType !== 'nano_banana') {
+    if (Array.isArray(extraOpts?.reference_images) && extraOpts.reference_images.length > 0) {
+      body.reference_images = extraOpts.reference_images.slice(0, 10);
+    }
+    if (extraOpts?.resolution) {
+      body.resolution = extraOpts.resolution;
+    }
   }
 
   const submitResp = await magnificPost(cfg.endpoint, body, apiKey);
@@ -626,7 +831,8 @@ export async function magnificGenerateVideo(
     if (opts.reference_video_url) body.reference_video = opts.reference_video_url;
   } else if (modelKey.startsWith('kling-')) {
     body.duration = String(opts.duration === 10 || opts.duration === '10' ? '10' : '5');
-    if (opts.aspect_ratio) body.aspect_ratio = REVERSE_ASPECT_RATIO_MAP[opts.aspect_ratio] ?? opts.aspect_ratio;
+    // Kling 2.x takes only widescreen_16_9 | social_story_9_16 | square_1_1 ("9:16" is refused).
+    if (opts.aspect_ratio) body.aspect_ratio = klingAspectFor(String(opts.aspect_ratio));
     if (opts.negative_prompt) body.negative_prompt = opts.negative_prompt;
     if (opts.cfg_scale != null) body.cfg_scale = opts.cfg_scale;
     if (opts.generate_audio != null) body.generate_audio = Boolean(opts.generate_audio);
@@ -867,13 +1073,14 @@ export async function magnificExecuteSpaceOrFlow(
 
   // Cost simulation (free pre-flight estimation)
   const estimateNodeCredits = (n: MagnificSpaceNode): number => {
-    if (n.type === 'magnific-one') return n.params?.mode === 'draft' ? 4 : (n.params?.resolution === '4k' ? 8 : 6);
-    if (n.type === 'image') return MAGNIFIC_IMAGE_MODELS[n.params?.model || 'magnific-one']?.credits ?? 5;
-    if (n.type === 'edit') return n.params?.type === 'remove-background' ? 1 : 5;
-    if (n.type === 'video') return MAGNIFIC_VIDEO_MODELS[n.params?.model || 'kling-v2-6-pro']?.credits ?? 25;
-    if (n.type === 'lip-sync') return 30;
-    if (n.type === 'audio') return 5;
-    return 5;
+    // Platform credits from Magnific's real cost × 1.54 (server/aiPricing.ts).
+    if (n.type === 'magnific-one') return creditsForMagnific(magnificOneCost(n.params ?? {}));
+    if (n.type === 'image') return creditsForMagnific(magnificImageCost(n.params?.model || 'magnific-one', n.params ?? {}));
+    if (n.type === 'edit') return creditsForMagnific(magnificEditCost(n.params?.type || 'upscale', n.params?.scale_factor));
+    if (n.type === 'video') return creditsForMagnific(magnificVideoCost(n.params?.model || 'kling-v2-6-pro', n.params ?? {}));
+    if (n.type === 'lip-sync') return creditsForMagnific(magnificLipSyncCost());
+    if (n.type === 'audio') return creditsForMagnific(magnificAudioCost(n.params?.type || 'sound-effects', n.params?.duration_seconds));
+    return creditsForMagnific(200);
   };
   const estimatedCredits = defaultNodes.reduce((sum, n) => sum + estimateNodeCredits(n), 0);
 
@@ -1062,7 +1269,7 @@ export async function freepikGenerateImage(
 
   const deadline = Date.now() + 150_000;
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 4000));
+    await sleep(4000);
     const pollResp = await axios.get(`${FREEPIK_BASE}/v1/ai/mystic/${taskId}`, {
       headers: proxyHeaders({
         'x-freepik-api-key': apiKey,
@@ -1071,7 +1278,8 @@ export async function freepikGenerateImage(
       }),
       validateStatus: () => true,
       timeout: 10000,
-    });
+    }).catch(() => null); // a missed status check must not fail a running task
+    if (!pollResp) continue;
     const data = pollResp.data?.data ?? pollResp.data;
     const status: string = data?.status ?? '';
     onProgress?.(status);
@@ -1088,6 +1296,9 @@ export async function freepikGenerateImage(
 
 export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase, pool }: MagnificDeps): Router {
   const router = express.Router();
+  webhookPool = pool;
+
+  const mask = (v: string) => (v.length > 8 ? `${'*'.repeat(v.length - 4)}${v.slice(-4)}` : (v ? '****' : ''));
 
   // GET /api/admin/magnific/config
   router.get('/admin/magnific/config', async (req: Request, res: Response) => {
@@ -1096,29 +1307,47 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
     if (!hasDatabase()) return res.status(503).json({ error: 'Database unavailable' });
     try {
       const r = await pool!.query(`SELECT config FROM platform_configs WHERE platform='magnific' LIMIT 1`);
-      const key: string = decryptPlatformConfig(r.rows[0]?.config)?.apiKey ?? '';
-      const masked = key.length > 8 ? `${'*'.repeat(key.length - 4)}${key.slice(-4)}` : (key ? '****' : '');
-      return res.json({ success: true, hasKey: !!key, maskedKey: masked });
+      const cfg = decryptPlatformConfig(r.rows[0]?.config) ?? {};
+      const key: string = cfg.apiKey || process.env.MAGNIFIC_API_KEY || '';
+      const secret: string = cfg.webhookSecret || process.env.MAGNIFIC_WEBHOOK_SECRET || '';
+      return res.json({
+        success: true,
+        hasKey: !!key,
+        maskedKey: mask(key),
+        keySource: cfg.apiKey ? 'admin' : key ? 'env' : null,
+        hasWebhookSecret: !!secret,
+        maskedWebhookSecret: mask(secret),
+        webhookSecretSource: cfg.webhookSecret ? 'admin' : secret ? 'env' : null,
+        webhookUrl: magnificWebhookUrl(),
+      });
     } catch (e: any) {
       return res.status(500).json({ error: e.message });
     }
   });
 
-  // PUT /api/admin/magnific/config
+  // PUT /api/admin/magnific/config — either field alone replaces just that field.
   router.put('/admin/magnific/config', async (req: Request, res: Response) => {
     const admin = await requireAdmin(req, res);
     if (!admin) return;
     if (!hasDatabase()) return res.status(503).json({ error: 'Database unavailable' });
-    const { apiKey } = req.body as { apiKey?: string };
-    if (!apiKey?.trim()) return res.status(400).json({ error: 'apiKey is required' });
+    const { apiKey, webhookSecret } = req.body as { apiKey?: string; webhookSecret?: string };
+    if (!apiKey?.trim() && !webhookSecret?.trim()) return res.status(400).json({ error: 'apiKey or webhookSecret is required' });
     try {
+      const existing = await pool!.query(`SELECT config FROM platform_configs WHERE platform='magnific' LIMIT 1`);
+      const next: Record<string, string> = { ...(decryptPlatformConfig(existing.rows[0]?.config) ?? {}) };
+      if (apiKey?.trim()) next.apiKey = apiKey.trim();
+      if (webhookSecret?.trim()) next.webhookSecret = webhookSecret.trim();
       await pool!.query(
         `INSERT INTO platform_configs (platform, config, enabled, updated_at)
          VALUES ('magnific', $1, true, NOW())
          ON CONFLICT (platform) DO UPDATE SET config=$1, enabled=true, updated_at=NOW()`,
-        [JSON.stringify(encryptPlatformConfig({ apiKey: apiKey.trim() }))]
+        [JSON.stringify(encryptPlatformConfig(next))]
       );
-      void recordAuditLog((admin as any).id, 'admin_provider_key_updated', [], { platform: 'magnific' });
+      await refreshMagnificWebhookTarget(pool);
+      void recordAuditLog((admin as any).id, 'admin_provider_key_updated', [], {
+        platform: 'magnific',
+        fields: [apiKey?.trim() && 'apiKey', webhookSecret?.trim() && 'webhookSecret'].filter(Boolean),
+      });
       return res.json({ success: true });
     } catch (e: any) {
       return res.status(500).json({ error: e.message });
@@ -1333,7 +1562,7 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
     const { prompt, mode, quality, resolution, aspect_ratio, tiles, reference_images, webhook_url } = req.body as MagnificOneOptions;
     if (!prompt?.trim()) return res.status(400).json({ error: 'prompt is required' });
 
-    const creditCost = mode === 'draft' ? 4 : (resolution === '4k' ? 8 : 6);
+    const creditCost = creditsForMagnific(magnificOneCost({ mode, quality, resolution }));
     const credRow = await pool!.query<{ credits: number }>('SELECT credits FROM user_credits WHERE user_id = $1', [auth.userId]).catch(() => ({ rows: [] as { credits: number }[] }));
     const currentCredits = credRow.rows[0]?.credits ?? 0;
     if (currentCredits < creditCost) {
@@ -1360,6 +1589,9 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
         return res.status(400).json({ error: errMsg });
       }
 
+      // Provider links expire; keep a copy in object storage (R2) and hand that out.
+      result.url = await durableMediaUrl(result.url, auth.userId);
+      if (Array.isArray((result as any).urls)) (result as any).urls = await durableMediaUrls((result as any).urls, auth.userId);
       await pool!.query(
         `UPDATE magnific_generations SET task_id=$1, status='completed', result_url=$2, completed_at=NOW() WHERE id=$3`,
         [result.taskId, result.url, genId]
@@ -1391,7 +1623,7 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
     if (!prompt?.trim()) return res.status(400).json({ error: 'prompt is required' });
 
     const modelKey = MAGNIFIC_IMAGE_MODELS[model] ? model : 'magnific-one';
-    const creditCost = MAGNIFIC_IMAGE_MODELS[modelKey]?.credits ?? 5;
+    const creditCost = creditsForMagnific(magnificImageCost(modelKey, req.body ?? {}));
 
     const credRow = await pool!.query<{ credits: number }>('SELECT credits FROM user_credits WHERE user_id = $1', [auth.userId]).catch(() => ({ rows: [] as { credits: number }[] }));
     const currentCredits = credRow.rows[0]?.credits ?? 0;
@@ -1423,6 +1655,9 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
         return res.status(400).json({ error: errMsg });
       }
 
+      // Provider links expire; keep a copy in object storage (R2) and hand that out.
+      result.url = await durableMediaUrl(result.url, auth.userId);
+      if (Array.isArray((result as any).urls)) (result as any).urls = await durableMediaUrls((result as any).urls, auth.userId);
       await pool!.query(
         `UPDATE magnific_generations SET status='completed', result_url=$1, completed_at=NOW() WHERE id=$2`,
         [result.url, genId]
@@ -1454,16 +1689,7 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
     const { type } = body;
     if (!type) return res.status(400).json({ error: 'type is required' });
 
-    const editCreditCosts: Record<string, number> = {
-      'upscale': 5,
-      'upscale-precision': 5,
-      'relight': 4,
-      'style-transfer': 5,
-      'remove-background': 1,
-      'image-expand': 5,
-      'seedream-edit': 5,
-    };
-    const creditCost = editCreditCosts[type] ?? 5;
+    const creditCost = creditsForMagnific(magnificEditCost(type, (req.body as any)?.scale_factor));
 
     const credRow = await pool!.query<{ credits: number }>(
       'SELECT credits FROM user_credits WHERE user_id = $1', [auth.userId]
@@ -1490,6 +1716,9 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
         return res.status(400).json({ error: errMsg });
       }
 
+      // Provider links expire; keep a copy in object storage (R2) and hand that out.
+      editResult.url = await durableMediaUrl(editResult.url, auth.userId);
+      if (Array.isArray((editResult as any).urls)) (editResult as any).urls = await durableMediaUrls((editResult as any).urls, auth.userId);
       await pool!.query(
         `UPDATE magnific_generations SET task_id=$1, status='completed', result_url=$2, completed_at=NOW() WHERE id=$3`,
         [editResult.taskId, editResult.url, genId]
@@ -1516,7 +1745,7 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
     }
 
     const modelKey = opts.model && MAGNIFIC_VIDEO_MODELS[opts.model] ? opts.model : (opts.image_url ? 'kling-v2-6-pro' : 'ltx-2-pro');
-    const creditCost = MAGNIFIC_VIDEO_MODELS[modelKey]?.credits ?? 25;
+    const creditCost = creditsForMagnific(magnificVideoCost(modelKey, opts as any));
 
     const credRow = await pool!.query<{ credits: number }>('SELECT credits FROM user_credits WHERE user_id = $1', [auth.userId]).catch(() => ({ rows: [] as { credits: number }[] }));
     const currentCredits = credRow.rows[0]?.credits ?? 0;
@@ -1541,6 +1770,9 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
         return res.status(400).json({ error: errMsg });
       }
 
+      // Provider links expire; keep a copy in object storage (R2) and hand that out.
+      result.url = await durableMediaUrl(result.url, auth.userId);
+      if (Array.isArray((result as any).urls)) (result as any).urls = await durableMediaUrls((result as any).urls, auth.userId);
       await pool!.query(
         `UPDATE magnific_generations SET task_id=$1, status='completed', result_url=$2, completed_at=NOW() WHERE id=$3`,
         [result.taskId, result.url, genId]
@@ -1573,7 +1805,7 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
       return res.status(400).json({ error: 'image_url and audio_url are required for OmniHuman 1.5 lip-sync' });
     }
 
-    const creditCost = 30;
+    const creditCost = creditsForMagnific(magnificLipSyncCost());
     const credRow = await pool!.query<{ credits: number }>('SELECT credits FROM user_credits WHERE user_id = $1', [auth.userId]).catch(() => ({ rows: [] as { credits: number }[] }));
     const currentCredits = credRow.rows[0]?.credits ?? 0;
     if (currentCredits < creditCost) {
@@ -1597,6 +1829,9 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
         return res.status(400).json({ error: errMsg });
       }
 
+      // Provider links expire; keep a copy in object storage (R2) and hand that out.
+      result.url = await durableMediaUrl(result.url, auth.userId);
+      if (Array.isArray((result as any).urls)) (result as any).urls = await durableMediaUrls((result as any).urls, auth.userId);
       await pool!.query(
         `UPDATE magnific_generations SET task_id=$1, status='completed', result_url=$2, completed_at=NOW() WHERE id=$3`,
         [result.taskId, result.url, genId]
@@ -1627,7 +1862,7 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
     const opts = req.body as MagnificAudioOptions;
     if (!opts.type) return res.status(400).json({ error: 'type (sound-effects, music-generation, or audio-isolation) is required' });
 
-    const creditCost = opts.type === 'music' || opts.type === 'music-generation' ? 6 : opts.type === 'audio-isolation' || opts.type === 'isolate' ? 5 : 4;
+    const creditCost = creditsForMagnific(magnificAudioCost(String(opts.type), (opts as any).duration_seconds));
     const credRow = await pool!.query<{ credits: number }>('SELECT credits FROM user_credits WHERE user_id = $1', [auth.userId]).catch(() => ({ rows: [] as { credits: number }[] }));
     const currentCredits = credRow.rows[0]?.credits ?? 0;
     if (currentCredits < creditCost) {
@@ -1651,6 +1886,9 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
         return res.status(400).json({ error: errMsg });
       }
 
+      // Provider links expire; keep a copy in object storage (R2) and hand that out.
+      result.url = await durableMediaUrl(result.url, auth.userId);
+      if (Array.isArray((result as any).urls)) (result as any).urls = await durableMediaUrls((result as any).urls, auth.userId);
       await pool!.query(
         `UPDATE magnific_generations SET task_id=$1, status='completed', result_url=$2, completed_at=NOW() WHERE id=$3`,
         [result.taskId, result.url, genId]
@@ -1710,6 +1948,7 @@ export function registerMagnificRoutes({ requireAuth, requireAdmin, hasDatabase,
     }
 
     if (result.final_url) {
+      result.final_url = await durableMediaUrl(result.final_url, auth.userId);
       const genId = randomUUID();
       await pool!.query(
         `INSERT INTO magnific_generations (id, user_id, type, model, prompt, params, status, result_url, completed_at)

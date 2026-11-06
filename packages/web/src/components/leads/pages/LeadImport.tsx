@@ -304,6 +304,7 @@ function SourceStep({
   const chosen = upload || driveFile;
 
   return (
+    <div data-tour="import-upload">
     <Card className="mb-8">
       <div className="mb-5 flex flex-wrap items-center gap-2">
         <TabButton active={tab === "upload"} onClick={() => setTab("upload")}>
@@ -398,6 +399,7 @@ function SourceStep({
 
       {error instanceof Error && <Note tone="bad">{error.message}</Note>}
     </Card>
+    </div>
   );
 }
 

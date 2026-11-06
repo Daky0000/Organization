@@ -9,6 +9,7 @@ process.env.INTEGRATIONS_ENCRYPTION_KEY ||= 'y'.repeat(32);
 process.env.WORDPRESS_ENCRYPTION_KEY ||= 'z'.repeat(32);
 
 import { publishDuePosts } from '../src/scheduler.ts';
+import { creditsForUsd } from '../src/server/aiPricing.ts';
 import { getRefreshMode } from '../src/social-token-policy.ts';
 import { InstagramBusinessPlatform } from '../backend/platforms/instagram_business.ts';
 import {
@@ -51,6 +52,14 @@ import {
 import { createAutopilotRepository } from '../src/server/autopilot/repository.ts';
 import { registerAutopilotRoutes, type AutopilotRoutesDeps } from '../src/server/autopilot/autopilotRoutes.ts';
 import { buildDakyXTechPilotSeed } from '../src/server/autopilot/types.ts';
+import { createMemoryStorageDriver } from '../src/server/autopilot/assetStorage.ts';
+import { createMemoryJobAccounting } from '../src/server/autopilot/billingAndBudgetService.ts';
+import { fakeVisualAdapter, jpegFixture, mp4Fixture, pngFixture } from './helpers/media-fixtures.ts';
+
+// Video models are unverified against Magnific's public API reference, so they
+// are only selectable when rolled out explicitly; these tests roll them out.
+const VIDEO_ROLLOUT = 'magnific:seedance-2-5,magnific:kling-3-0-omni';
+process.env.AUTOPILOT_MODEL_ROLLOUT = VIDEO_ROLLOUT;
 
 function createAutopilotTestHarness(overrides: Partial<AutopilotRoutesDeps> = {}) {
   const queries: Array<{ sql: string; params?: any[] }> = [];
@@ -65,6 +74,7 @@ function createAutopilotTestHarness(overrides: Partial<AutopilotRoutesDeps> = {}
     pool: fakePool as any,
     hasDatabase: () => false,
   });
+  const storage = createMemoryStorageDriver();
 
   const app = express();
   app.use(express.json({ limit: '2mb' }));
@@ -82,12 +92,16 @@ function createAutopilotTestHarness(overrides: Partial<AutopilotRoutesDeps> = {}
     pool: fakePool as any,
     hasDatabase: () => false,
     repo,
-    visualAdapter: async (input) => ({
-      url: `https://cdn.example.com/generated/${input.provider}-${input.model}-${Date.now()}.${input.model.includes('seedance') || input.model.includes('kling') ? 'mp4' : 'png'}`,
-      type: input.model.includes('seedance') || input.model.includes('kling') ? 'video' : 'image',
-      provider: input.provider,
-      model: input.model,
-    }),
+    visualAdapter: fakeVisualAdapter(),
+    assetStorage: storage,
+    verifyDelivery: async () => {},
+    // Stands in for the SSRF-guarded download of a customer's own media.
+    fetchCustomerMedia: async (url: string) =>
+      /\.(mp4|mov)(\?|$)/i.test(url)
+        ? { buffer: mp4Fixture({ durationMs: 12000 }), mimeType: 'video/mp4' }
+        : { buffer: jpegFixture(1080, 1350), mimeType: 'image/jpeg' },
+    accounting: createMemoryJobAccounting(),
+    retryDelayMs: 0,
     publisherAdapter: async (input) => ({
       remotePostId: `ig_live_${input.channel}_${input.idempotencyKey.slice(-8)}`,
       url: `https://social.example.com/${input.channel}/p/${input.idempotencyKey.slice(-8)}`,
@@ -96,7 +110,7 @@ function createAutopilotTestHarness(overrides: Partial<AutopilotRoutesDeps> = {}
   });
 
   app.use('/api/v1', router);
-  return { app, repo, queries };
+  return { app, repo, queries, storage };
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -160,7 +174,7 @@ test('Phase 0.2: Instagram Business connector & token policy support FEED_POST, 
     true,
   );
 
-  // Valid CAROUSEL (4 items) vs >10 items rejected
+  // Valid CAROUSEL (4 items) vs >20 items rejected (Meta raised the cap from 10 to 20)
   assert.equal(
     ig.validate({
       id: 'p2',
@@ -178,8 +192,8 @@ test('Phase 0.2: Instagram Business connector & token policy support FEED_POST, 
     ig.validate({
       id: 'p2_too_many',
       type: 'FEED_POST',
-      content: { text: '11-slide carousel' },
-      media: Array.from({ length: 11 }, (_, i) => ({
+      content: { text: '21-slide carousel' },
+      media: Array.from({ length: 21 }, (_, i) => ({
         url: `https://cdn.example.com/slide-${i + 1}.png`,
         mimeType: 'image/png',
         type: 'image',
@@ -220,13 +234,16 @@ test('Phase 0.2: Instagram Business connector & token policy support FEED_POST, 
   );
 });
 
-test('Phase 0.3: OpenAI image route removes deprecated dall-e-2/dall-e-3 defaults and enforces gpt-image-1 with separate USD & credit rates', async () => {
-  assert.ok(DEPRECATED_OPENAI_IMAGE_MODELS.has('dall-e-3'));
-  assert.ok(DEPRECATED_OPENAI_IMAGE_MODELS.has('dall-e-2'));
-  assert.ok(OPENAI_IMAGE_MODELS['gpt-image-1']);
-  assert.ok(OPENAI_IMAGE_MODELS['gpt-image-1-mini']);
-  assert.ok(OPENAI_IMAGE_MODELS['gpt-image-1'].providerCostUsd > 0);
-  assert.ok(OPENAI_IMAGE_MODELS['gpt-image-1'].credits > 0);
+test('Phase 0.3: OpenAI image route rejects retired models (dall-e-*, gpt-image-1, gpt-image-1-mini) and offers only gpt-image-2.5 with separate USD & credit rates', async () => {
+  for (const retired of ['dall-e-3', 'dall-e-2', 'gpt-image-1', 'gpt-image-1-mini']) {
+    assert.ok(DEPRECATED_OPENAI_IMAGE_MODELS.has(retired), `${retired} must be listed as retired`);
+    assert.equal(OPENAI_IMAGE_MODELS[retired], undefined, `${retired} must not be selectable`);
+  }
+  assert.deepEqual(Object.keys(OPENAI_IMAGE_MODELS).sort(), ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst']);
+  for (const m of Object.values(OPENAI_IMAGE_MODELS)) {
+    assert.ok(m.providerCostUsd > 0);
+    assert.ok(m.credits > 0);
+  }
 
   const app = express();
   app.use(express.json());
@@ -246,8 +263,9 @@ test('Phase 0.3: OpenAI image route removes deprecated dall-e-2/dall-e-3 default
     .send({ prompt: 'Clean studio product shot', model: 'dall-e-3' });
 
   assert.equal(res.status, 400);
-  assert.match(res.body.error, /deprecated/i);
-  assert.match(res.body.error, /gpt-image-1/);
+  assert.equal(res.body.code, 'MODEL_UNAVAILABLE');
+  assert.match(res.body.error, /retired/i);
+  assert.match(res.body.error, /gpt-image-2\.5-flare/);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -474,19 +492,35 @@ test('Unit 3: Creative Modes, Model Router, and Dual Cost Estimator differentiat
 
   // Task-based routing checks
   const demoRoute = routeModelForBrief({ workflowType: 'product_demo', controls: strictBrief.controls });
-  assert.equal(demoRoute.primary.provider, 'deterministic');
+  assert.equal(demoRoute.primary?.provider, 'deterministic');
 
+  // nano-banana-pro is preferred for in-image text but its Magnific API
+  // contract is unverified, so without a rollout the router skips it — and says so.
   const typoRoute = routeModelForBrief({
     workflowType: 'branded_social_graphic',
     controls: { ...strictBrief.controls, text_in_image: 'allowed', media_source_mode: 'ai_generated' },
   });
-  assert.equal(typoRoute.primary.model, 'nano-banana-pro');
+  assert.equal(typoRoute.primary?.model, 'gpt-image-2.5-sunburst');
+  assert.match(typoRoute.rationale, /magnific:nano-banana-pro \(unverified_contract\)/);
+  const typoRolledOut = routeModelForBrief({
+    workflowType: 'branded_social_graphic',
+    controls: { ...strictBrief.controls, text_in_image: 'allowed', media_source_mode: 'ai_generated' },
+    env: { AUTOPILOT_MODEL_ROLLOUT: 'magnific:nano-banana-pro' } as any,
+  });
+  assert.equal(typoRolledOut.primary?.model, 'nano-banana-pro');
 
   const videoRoute = routeModelForBrief({
     workflowType: 'short_form_video',
     controls: { ...strictBrief.controls, reference_fidelity: 'strict', media_source_mode: 'ai_generated' },
   });
-  assert.equal(videoRoute.primary.model, 'kling-3-0-omni');
+  assert.equal(videoRoute.primary?.model, 'kling-3-0-omni');
+  const noVideo = routeModelForBrief({
+    workflowType: 'short_form_video',
+    controls: { ...strictBrief.controls, media_source_mode: 'ai_generated' },
+    env: {} as any,
+  });
+  assert.equal(noVideo.primary, null, 'with no verified or rolled-out video model there is no silent substitute');
+  assert.equal(noVideo.unavailable?.code, 'MODEL_UNAVAILABLE');
 
   // Dual Cost Estimator reports USD and internal SaaS credits separately
   const cost = estimateGenerationCost({
@@ -579,7 +613,7 @@ test('Unit 5: Workflow B (short_form_video) enforces "no music" rule on multi-cl
     capacity: {
       weekly_hours: 6,
       monthly_budget_usd: 100,
-      monthly_credit_cap: 1500,
+      monthly_credit_cap: 5000, // a 3-clip Seedance 2.5 video costs ~$11.85 → ~2,451 credits at cost × 1.54
       has_founder_footage: false,
       has_product_demos: false,
       has_photography: false,
@@ -635,12 +669,27 @@ test('Unit 5: Workflow B (short_form_video) enforces "no music" rule on multi-cl
   const visualAdapter = async (input: any) => {
     adapterCalls.push(input.prompt);
     return {
-      url: `https://cdn.example.com/scene-call-${adapterCalls.length}.mp4`,
-      type: 'video' as const,
+      ok: true as const,
       provider: input.provider,
       model: input.model,
+      mediaType: 'video' as const,
+      providerRequestId: `task_${adapterCalls.length}`,
+      // Distinct bytes per call, so each render is its own stored object.
+      bytes: mp4Fixture({ durationMs: 4000 + adapterCalls.length * 100 }),
+      mimeType: 'video/mp4',
     };
   };
+  const storage = createMemoryStorageDriver();
+  // Real Seedance pricing: this video costs ~$11.85, so the tenant allows jobs up to $25.
+  const accounting = createMemoryJobAccounting({ controls: () => ({ per_job_max_usd: 25 }) });
+  const assets = { storage, verifyDelivery: async () => {} };
+
+  // A real 3-clip Seedance video costs ~$11.85 — above the auto-approve threshold, so the user confirms the spend first.
+  const { createCreativeBriefForItem } = await import('../src/server/autopilot/creativeBriefAndRouter.ts');
+  await repo.saveCreativeBrief(createCreativeBriefForItem({
+    item: (await repo.getContentItem('t_vid', item.id))!, business: (await repo.getBusinessProfile('t_vid'))!, brand: null,
+    preferDraftCost: true, controlsOverride: { user_confirmed_spend: true },
+  }));
 
   // Initial full 3-scene render
   const firstRun = await executeAutopilotWorkflow({
@@ -651,6 +700,8 @@ test('Unit 5: Workflow B (short_form_video) enforces "no music" rule on multi-cl
     itemId: item.id,
     preferDraftCost: true,
     visualAdapter,
+    assets,
+    accounting,
   });
 
   assert.equal(firstRun.item.storyboard.length, 3);
@@ -659,8 +710,16 @@ test('Unit 5: Workflow B (short_form_video) enforces "no music" rule on multi-cl
     firstRun.item.storyboard.every((sc) => /\bno\s+music\b/i.test(sc.visual_description)),
     'Every AI scene in a multi-clip video must enforce "no music" audio hygiene',
   );
-  const scene1OriginalUrl = firstRun.item.storyboard[0].asset_url;
-  const scene3OriginalUrl = firstRun.item.storyboard[2].asset_url;
+  const scene1Original = firstRun.item.storyboard[0].asset_id;
+  const scene3Original = firstRun.item.storyboard[2].asset_id;
+  assert.ok(scene1Original && scene3Original, 'every rendered scene is a stored asset');
+  assert.ok(firstRun.item.storyboard.every((sc) => !sc.asset_url), 'no scene carries a fabricated or inline URL');
+  // Three clips and no edited master: they are scene clips, and QA blocks publishing.
+  assert.ok(firstRun.item.media_assets.every((m) => m.role === 'scene_clip'));
+  assert.ok((firstRun.item.validation_report as any).issues.some((i: any) => i.code === 'REEL_NOT_ASSEMBLED'));
+  assert.equal(firstRun.accounting?.status, 'settled');
+  assert.equal(firstRun.accounting?.settled_credits, 3 * creditsForUsd(0.475), 'lowest cost by default: three Kling 3.0 Omni clips (not Seedance) at cost × 1.54');
+  assert.equal(firstRun.accounting?.cost_status, 'estimated', 'Magnific reports no usage, so cost is an estimate, not actual');
 
   // Selective regeneration of Scene 2 ONLY — Scenes 1 & 3 must NOT re-render
   const secondRun = await executeAutopilotWorkflow({
@@ -672,12 +731,15 @@ test('Unit 5: Workflow B (short_form_video) enforces "no music" rule on multi-cl
     preferDraftCost: true,
     regenerateSceneNumbers: [2],
     visualAdapter,
+    assets,
+    accounting,
   });
 
   assert.equal(adapterCalls.length, 4, 'Only 1 additional video scene call should execute during selective regen');
-  assert.equal(secondRun.item.storyboard[0].asset_url, scene1OriginalUrl);
-  assert.equal(secondRun.item.storyboard[2].asset_url, scene3OriginalUrl);
-  assert.notEqual(secondRun.item.storyboard[1].asset_url, firstRun.item.storyboard[1].asset_url);
+  assert.equal(secondRun.item.storyboard[0].asset_id, scene1Original);
+  assert.equal(secondRun.item.storyboard[2].asset_id, scene3Original);
+  assert.notEqual(secondRun.item.storyboard[1].asset_id, firstRun.item.storyboard[1].asset_id);
+  assert.equal(secondRun.accounting?.settled_credits, creditsForUsd(0.475), 'the rerun charges one scene, not three');
   const storyboardNode = secondRun.run.node_executions.find((n) => n.node_id === 'node_storyboard_and_selective_render');
   assert.equal(storyboardNode?.outputs.scenes_rendered, 1);
   assert.equal(storyboardNode?.outputs.scenes_preserved_without_rerun, 2);
@@ -913,7 +975,7 @@ test('E2E 1 (SaaS Company): website scan -> approve brand -> generate strategy -
   const schedRes = await request(app)
     .post(`/api/v1/autopilot/items/${itemId}/schedule`)
     .set(hdr)
-    .send({ scheduled_at: '2026-11-10T14:00:00.000Z', channels: ['instagram'] })
+    .send({ scheduled_at: '2030-11-10T14:00:00.000Z', channels: ['instagram'] })
     .expect(200);
   assert.equal(schedRes.body.item.lifecycle_state, 'scheduled');
   assert.equal(schedRes.body.publications.length, 1);
@@ -996,7 +1058,7 @@ test('E2E 2 (Ecommerce Brand): product photo -> merchandising strategy -> carous
   const sched = await request(app)
     .post(`/api/v1/autopilot/items/${carouselItem.body.item.id}/schedule`)
     .set(hdr)
-    .send({ scheduled_at: '2026-11-12T16:00:00.000Z', channels: ['instagram'] })
+    .send({ scheduled_at: '2030-11-12T16:00:00.000Z', channels: ['instagram'] })
     .expect(200);
 
   assert.equal(sched.body.publications[0].platform_media_type, 'CAROUSEL');
@@ -1036,8 +1098,8 @@ test('E2E 3 (Local Service Business): service area & booking intake -> local tru
             channels: ['instagram', 'facebook'],
           },
         ],
-        blackout_dates: ['2026-11-26'], // Thanksgiving blackout!
-        holidays: [{ date: '2026-11-26', name: 'Thanksgiving Closure' }],
+        blackout_dates: ['2030-11-26'], // Thanksgiving blackout!
+        holidays: [{ date: '2030-11-26', name: 'Thanksgiving Closure' }],
       },
     })
     .expect(200);
@@ -1053,19 +1115,21 @@ test('E2E 3 (Local Service Business): service area & booking intake -> local tru
   assert.equal(batch.body.items.length, 2);
   // Batch generator skips blackout dates automatically
   for (const it of batch.body.items) {
-    assert.notEqual(it.scheduled_slot?.scheduled_at?.slice(0, 10), '2026-11-26');
+    assert.notEqual(it.scheduled_slot?.scheduled_at?.slice(0, 10), '2030-11-26');
   }
 
-  const firstItemId = batch.body.items[0].id;
+  // A multi-scene video cannot be approved until its clips are assembled into one
+  // master (REEL_NOT_ASSEMBLED), so the scheduling checks use the graphic item.
+  const firstItemId = (batch.body.items.find((i: any) => i.workflow_type !== 'short_form_video') ?? batch.body.items[0]).id;
   await request(app).post('/api/v1/autopilot/brand-profile/approve').set(hdr).send({}); // optional if no brand yet
   await request(app).post(`/api/v1/autopilot/items/${firstItemId}/generate`).set(hdr).send({}).expect(200);
   await request(app).post(`/api/v1/autopilot/items/${firstItemId}/approve`).set(hdr).send({}).expect(200);
 
-  // Attempting to schedule on blackout date 2026-11-26 must fail with 409 BLACKOUT_WINDOW_CONFLICT
+  // Attempting to schedule on blackout date 2030-11-26 must fail with 409 BLACKOUT_WINDOW_CONFLICT
   const blackoutAttempt = await request(app)
     .post(`/api/v1/autopilot/items/${firstItemId}/schedule`)
     .set(hdr)
-    .send({ scheduled_at: '2026-11-26T15:00:00.000Z', slot_id: 'slot_wed_local' });
+    .send({ scheduled_at: '2030-11-26T15:00:00.000Z', slot_id: 'slot_wed_local' });
   assert.equal(blackoutAttempt.status, 409);
   assert.equal(blackoutAttempt.body.code, 'BLACKOUT_WINDOW_CONFLICT');
 
@@ -1073,7 +1137,7 @@ test('E2E 3 (Local Service Business): service area & booking intake -> local tru
   const validSchedule = await request(app)
     .post(`/api/v1/autopilot/items/${firstItemId}/schedule`)
     .set(hdr)
-    .send({ scheduled_at: '2026-11-25T16:00:00.000Z', slot_id: 'slot_wed_local' })
+    .send({ scheduled_at: '2030-11-25T16:00:00.000Z', slot_id: 'slot_wed_local' })
     .expect(200);
   assert.equal(validSchedule.body.publications[0].slot_name, 'Wednesday Homeowner Tip Slot');
   assert.equal(validSchedule.body.publications[0].timezone, 'America/Chicago');
@@ -1408,7 +1472,7 @@ test('E2E 8 (Failed Publish Retry & Idempotency): transient 503 marks retryable 
   const sched = await request(app)
     .post(`/api/v1/autopilot/items/${itemId}/schedule`)
     .set(hdr)
-    .send({ scheduled_at: '2026-11-18T12:00:00.000Z', channels: ['instagram'] })
+    .send({ scheduled_at: '2030-11-18T12:00:00.000Z', channels: ['instagram'] })
     .expect(200);
   const pubId = sched.body.publications[0].id;
 
@@ -1420,8 +1484,10 @@ test('E2E 8 (Failed Publish Retry & Idempotency): transient 503 marks retryable 
     .expect(200);
 
   assert.equal(remoteApiCalls, 1);
-  assert.equal(attempt1.body.publication.status, 'publish_failed');
+  // Transient failures wait for an automatic retry instead of failing terminally.
+  assert.equal(attempt1.body.publication.status, 'retry_wait');
   assert.equal(attempt1.body.publication.retryable, true);
+  assert.ok(attempt1.body.publication.next_attempt_at);
   assert.equal(attempt1.body.attempt.status, 'failed_retryable');
   assert.ok(attempt1.body.attempt.next_retry_at, 'Must schedule exponential backoff timestamp');
 
@@ -1473,7 +1539,7 @@ test('E2E 9 (Cross-Tenant Isolation & Privacy Purge): Tenant A assets, strategie
   const schedA = await request(app)
     .post(`/api/v1/autopilot/items/${itemA.body.item.id}/schedule`)
     .set(tenantA)
-    .send({ scheduled_at: '2026-11-20T10:00:00.000Z', channels: ['instagram'] })
+    .send({ scheduled_at: '2030-11-20T10:00:00.000Z', channels: ['instagram'] })
     .expect(200);
   const pubIdA = schedA.body.publications[0].id;
 
@@ -1650,7 +1716,7 @@ test('PostgreSQL E2E: migrations, full Autopilot SQL repository, review link, an
     const sched = await request(app)
       .post(`/api/v1/autopilot/items/${itemId}/schedule`)
       .set(hdr)
-      .send({ scheduled_at: '2026-12-01T14:00:00.000Z', channels: ['instagram'] })
+      .send({ scheduled_at: '2030-12-01T14:00:00.000Z', channels: ['instagram'] })
       .expect(200);
     assert.ok(sched.body.item.linked_blog_post_id);
 
@@ -1667,4 +1733,41 @@ test('PostgreSQL E2E: migrations, full Autopilot SQL repository, review link, an
   } finally {
     await pool.end();
   }
+});
+
+
+test('Caption regenerate: priced first — nothing written or charged until confirmed; then an AI caption in the brand voice is saved and charged once', async () => {
+  const charges: Array<{ userId: string; credits: number; reason: string }> = [];
+  const prompts: string[] = [];
+  const { app } = createAutopilotTestHarness({
+    copyAdapter: async (prompt: string, system?: string) => {
+      prompts.push(`${system}\n${prompt}`);
+      return JSON.stringify({ caption: 'Our rye proves for 18 hours. Saturday batch: 40 loaves.', hashtags: ['leedsbakery'] });
+    },
+    chargeCredits: async (userId, credits, reason) => { charges.push({ userId, credits, reason }); },
+    creditBalance: async () => 500,
+  });
+  const hdr = { 'x-test-user': 'caption_regen_user' };
+  await request(app).put('/api/v1/autopilot/business-profile').set(hdr).send({
+    business_name: 'Crumb & Co', industry: 'Bakery', niche: 'Sourdough', business_model: 'saas', primary_objective: 'launches',
+  }).expect(200);
+  const created = await request(app).post('/api/v1/autopilot/items').set(hdr).send({
+    title: 'Rye loaf is back', hook: 'Back on Saturday', caption: 'Old caption', format: 'static_graphic', target_channels: ['instagram'],
+  }).expect(201);
+  const id = created.body.item.id;
+
+  const quote = await request(app).post(`/api/v1/autopilot/items/${id}/regenerate-caption`).set(hdr).send({}).expect(200);
+  assert.equal(quote.body.needs_confirmation, true);
+  assert.ok(quote.body.credits > 0);
+  assert.equal(prompts.length, 0, 'the AI is not called before the user confirms');
+  assert.equal(charges.length, 0, 'nothing is charged before the user confirms');
+  const unchanged = await request(app).get(`/api/v1/autopilot/items/${id}`).set(hdr).expect(200);
+  assert.equal(unchanged.body.item.caption, 'Old caption');
+
+  const done = await request(app).post(`/api/v1/autopilot/items/${id}/regenerate-caption`).set(hdr).send({ confirm: true }).expect(200);
+  assert.match(done.body.item.caption, /Our rye proves for 18 hours/);
+  assert.match(done.body.item.caption, /#leedsbakery/);
+  assert.doesNotMatch(done.body.item.caption, /Actionable insight/);
+  assert.deepEqual(charges.map((c) => [c.credits, c.reason]), [[quote.body.credits, 'autopilot_caption_regenerate']]);
+  assert.match(prompts[0], /Crumb & Co/, 'written from the business profile');
 });

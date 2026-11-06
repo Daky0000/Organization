@@ -18,7 +18,7 @@ import { randomUUID } from 'crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import type { Pool } from 'pg';
 import { logger } from '../../logger.ts';
-import { FAST_MODEL, getAIConfig, hasAICredits, recordAIUsage, resolveActiveKey } from '../../ai-helpers.ts';
+import { FAST_MODEL, freeFirst, getAIConfig, hasAICredits, recordAIUsage, resolveActiveKey } from '../../ai-helpers.ts';
 import { OBJECTION_LABELS, type ObjectionCode } from './types.ts';
 
 /** Below this many observations a pattern is not a pattern. */
@@ -257,27 +257,35 @@ export async function runInsightAgent(pool: Pool, userId: string): Promise<numbe
 
   const cfg = await getAIConfig();
   const apiKey = resolveActiveKey(cfg);
-  if (!apiKey || cfg.provider !== 'anthropic') return 0;
+  const paidAvailable = Boolean(apiKey) && cfg.provider === 'anthropic';
+  if (!paidAvailable && !cfg.nvidiaReady) return 0;
 
-  const client = new Anthropic({ apiKey });
   let text = '';
   try {
-    const resp = await client.messages.create({
-      model: FAST_MODEL,
-      max_tokens: 1600,
-      system: INSIGHT_SYSTEM_PROMPT,
-      output_config: { format: { type: 'json_schema', schema: INSIGHT_SCHEMA } },
-      messages: [{ role: 'user', content: formatAggregates(agg) }],
-    } as any);
-    text = (resp as any).content?.[0]?.type === 'text' ? (resp as any).content[0].text : '';
-    await recordAIUsage({
-      userId,
-      feature: 'sales_insights',
-      provider: 'anthropic',
-      model: FAST_MODEL,
-      inputTokens: (resp as any).usage?.input_tokens ?? 0,
-      outputTokens: (resp as any).usage?.output_tokens ?? 0,
-    });
+    // Free NVIDIA agent ladder first (an unparseable answer counts as a failed
+    // try); Claude with structured output only when all three failed.
+    text = await freeFirst(
+      {
+        system: `${INSIGHT_SYSTEM_PROMPT}\n\nRespond with a single JSON object and nothing else, matching:\n${JSON.stringify(INSIGHT_SCHEMA)}`,
+        user: formatAggregates(agg), maxTokens: 1600, job: 'agent', userId, feature: 'sales_insights',
+        accept: (t) => parseInsightOutput(t).length > 0 || /"insights"\s*:\s*\[\s*\]/.test(t),
+      },
+      paidAvailable ? async () => {
+        const resp = await new Anthropic({ apiKey }).messages.create({
+          model: FAST_MODEL,
+          max_tokens: 1600,
+          system: INSIGHT_SYSTEM_PROMPT,
+          output_config: { format: { type: 'json_schema', schema: INSIGHT_SCHEMA } },
+          messages: [{ role: 'user', content: formatAggregates(agg) }],
+        } as any);
+        await recordAIUsage({
+          userId, feature: 'sales_insights', provider: 'anthropic', model: FAST_MODEL,
+          inputTokens: (resp as any).usage?.input_tokens ?? 0,
+          outputTokens: (resp as any).usage?.output_tokens ?? 0,
+        });
+        return (resp as any).content?.[0]?.type === 'text' ? (resp as any).content[0].text : '';
+      } : null,
+    );
   } catch (err) {
     logger.warn({ err, userId }, 'sales_insight_generation_failed');
     return 0;

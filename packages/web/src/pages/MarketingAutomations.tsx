@@ -1632,7 +1632,7 @@ export default function MarketingAutomations() {
           <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-950">Automations</h1>
           <p className="mt-2 text-base text-slate-500">Build customer journeys — automated workflows that engage contacts at the right moment.</p>
         </div>
-        <button type="button" onClick={() => setShowCreate(true)}
+        <button data-tour="auto-create" type="button" onClick={() => setShowCreate(true)}
           className="flex shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 shadow-sm transition-colors">
           <Plus size={15} /> Create automation
         </button>
@@ -1655,7 +1655,7 @@ export default function MarketingAutomations() {
       )}
 
       {/* Node-type reference */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5">
+      <div data-tour="auto-steps" className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="mb-3 flex items-center gap-2">
           <Shuffle size={14} className="text-slate-400" />
           <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Available steps</span>
@@ -1695,7 +1695,7 @@ export default function MarketingAutomations() {
       )}
 
       {!loading && !error && flows.length > 0 && (
-        <div className="space-y-3">
+        <div data-tour="auto-list" className="space-y-3">
           {flows.map(flow => (
             <FlowCard
               key={flow.id}

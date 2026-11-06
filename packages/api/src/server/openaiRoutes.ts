@@ -1,4 +1,5 @@
 import express from 'express';
+import { OPENAI_TTS_USD_PER_1K_CHARS, creditsForUsd } from './aiPricing.ts';
 import { chargeAICredits, ensureCreditAccount } from '../ai-helpers.ts';
 import type { Router, Response } from 'express';
 import type { Request } from '../types/http.ts';
@@ -21,15 +22,42 @@ interface OpenAIDeps {
 
 const OPENAI_BASE = 'https://api.openai.com/v1';
 
-// Official current OpenAI image models; deprecated dall-e-2 / dall-e-3 removed per model audit.
+// Checked against developers.openai.com/api/docs/models and /deprecations on
+// 2026-10-29. providerCostUsd is an upper estimate (image output is priced per
+// token); keep it, the credits and the autopilot registry in step — the
+// registry-consistency test fails when they drift.
 export const OPENAI_IMAGE_MODELS: Record<string, { credits: number; providerCostUsd: number; returnFormat: 'b64' }> = {
-  'gpt-image-1':      { credits: 8, providerCostUsd: 0.04, returnFormat: 'b64' },
-  'gpt-image-1-mini': { credits: 4, providerCostUsd: 0.015, returnFormat: 'b64' },
+  'gpt-image-2.5-flare':    { credits: 8,  providerCostUsd: 0.129, returnFormat: 'b64' },
+  'gpt-image-2.5-sunburst': { credits: 12, providerCostUsd: 0.129, returnFormat: 'b64' },
 };
 
-export const DEPRECATED_OPENAI_IMAGE_MODELS = new Set(['dall-e-2', 'dall-e-3']);
+// `.credits` follows the provider cost × 1.54 (server/aiPricing.ts).
+for (const m of Object.values(OPENAI_IMAGE_MODELS)) {
+  Object.defineProperty(m, 'credits', { get: () => creditsForUsd(m.providerCostUsd), enumerable: true, configurable: true });
+}
 
-const OPENAI_TTS_CREDITS: Record<string, number> = { 'gpt-4o-mini-tts': 3, 'tts-1': 2, 'tts-1-hd': 4 };
+export const DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2.5-flare';
+
+// Shut down (dall-e-2, dall-e-3: 2026-05-12; gpt-image-1: 2026-10-23) or
+// announced for shutdown (gpt-image-1-mini, gpt-image-1.5, chatgpt-image-latest: 2026-12-01).
+export const DEPRECATED_OPENAI_IMAGE_MODELS = new Set([
+  'dall-e-2', 'dall-e-3', 'gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-1.5-2025-12-16', 'chatgpt-image-latest',
+]);
+
+/** WIDTHxHEIGHT for gpt-image-2.5: both sides divisible by 16, ratio between 1:3 and 3:1. */
+export function openaiImageSizeForAspect(aspect: string): string {
+  switch (aspect) {
+    case '16:9': return '1792x1008';
+    case '9:16': return '1008x1792';
+    case '4:5': return '1024x1280';
+    case '3:4': return '1152x1536';
+    case '4:3': return '1536x1152';
+    default: return '1024x1024';
+  }
+}
+
+/** Minimum charge per speech request; the real charge follows the text length (OPENAI_TTS_USD_PER_1K_CHARS). */
+const OPENAI_TTS_CREDITS: Record<string, number> = { 'gpt-4o-mini-tts': 1, 'tts-1': 1, 'tts-1-hd': 1 };
 
 export function registerOpenAIRoutes({ requireAuth, requireAdmin, hasDatabase, dbQuery, pool }: OpenAIDeps): Router {
   const router = express.Router();
@@ -45,9 +73,7 @@ export function registerOpenAIRoutes({ requireAuth, requireAdmin, hasDatabase, d
   }
 
   function openaiImageSize(_model: string, aspect: string): string {
-    if (aspect === '16:9') return '1536x1024';
-    if (aspect === '9:16') return '1024x1536';
-    return '1024x1024';
+    return openaiImageSizeForAspect(aspect);
   }
 
   async function storeImageViaImgbb(base64Data: string, mimeType: string): Promise<string> {
@@ -136,10 +162,10 @@ export function registerOpenAIRoutes({ requireAuth, requireAdmin, hasDatabase, d
     if (!auth) return;
     if (!hasDatabase()) return res.status(503).json({ error: 'Database unavailable' });
 
-    const { prompt = '', model = 'gpt-image-1', aspect_ratio = '1:1', quality = 'auto', save = true } = req.body as Record<string, any>;
+    const { prompt = '', model = DEFAULT_OPENAI_IMAGE_MODEL, aspect_ratio = '1:1', quality = 'auto', save = true } = req.body as Record<string, any>;
     if (!prompt.trim()) return res.status(400).json({ error: 'Prompt is required' });
     if (DEPRECATED_OPENAI_IMAGE_MODELS.has(String(model))) {
-      return res.status(400).json({ error: `Model "${model}" is deprecated and no longer supported. Use "gpt-image-1" or "gpt-image-1-mini".` });
+      return res.status(400).json({ code: 'MODEL_UNAVAILABLE', error: `Model "${model}" is retired or scheduled for shutdown by OpenAI. Use ${Object.keys(OPENAI_IMAGE_MODELS).map((m) => `"${m}"`).join(' or ')}.` });
     }
 
     const cfg = OPENAI_IMAGE_MODELS[model];
@@ -150,16 +176,18 @@ export function registerOpenAIRoutes({ requireAuth, requireAdmin, hasDatabase, d
     if (!apiKey) return res.status(503).json({ error: 'OpenAI API not configured' });
 
     // Support admin-configurable rate card override in platform_configs('openai') so prices are never hard-coded indefinitely
-    let creditCost = cfg.credits;
     let providerCostUsd = cfg.providerCostUsd;
+    let adminCredits = 0;
     try {
       const cfgRow = await dbQuery<{ config: Record<string, string> }>('SELECT config FROM platform_configs WHERE platform=$1', ['openai']);
       const dec = decryptPlatformConfig(cfgRow.rows[0]?.config);
       const customCredits = Number(dec?.[`credits_${model}`]);
       const customUsd = Number(dec?.[`cost_usd_${model}`]);
-      if (Number.isFinite(customCredits) && customCredits > 0) creditCost = Math.round(customCredits);
+      if (Number.isFinite(customCredits) && customCredits > 0) adminCredits = Math.round(customCredits);
       if (Number.isFinite(customUsd) && customUsd >= 0) providerCostUsd = customUsd;
     } catch { /* fallback to default rate card */ }
+    // Never below cost × 1.54: an admin price can raise it, not undercut it.
+    const creditCost = Math.max(creditsForUsd(providerCostUsd), adminCredits);
 
     const creditAcc = await ensureCreditAccount(auth.userId).catch(() => ({ credits: 0 }));
     const currentCredits = typeof creditAcc === 'number' ? creditAcc : creditAcc.credits;
@@ -233,7 +261,8 @@ export function registerOpenAIRoutes({ requireAuth, requireAdmin, hasDatabase, d
     const apiKey = await getOpenAIApiKey();
     if (!apiKey) return res.status(503).json({ error: 'OpenAI API not configured' });
 
-    const creditCost = OPENAI_TTS_CREDITS[model] ?? 3;
+    // Billed per character: cost × 1.54 (server/aiPricing.ts).
+    const creditCost = Math.max(OPENAI_TTS_CREDITS[model] ?? 1, creditsForUsd((text.trim().length / 1000) * (OPENAI_TTS_USD_PER_1K_CHARS[model] ?? 0.03)));
     const creditAcc = await ensureCreditAccount(auth.userId).catch(() => ({ credits: 0 }));
     const currentCredits = typeof creditAcc === 'number' ? creditAcc : creditAcc.credits;
     if (currentCredits < creditCost) {

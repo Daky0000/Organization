@@ -40,6 +40,13 @@ export type CalendarPost = {
   status: CalendarPostStatus | string;
   created_at?: string;
   updated_at?: string;
+  content?: string | null;
+  featured_image?: string | null;
+  media_assets?: unknown;
+  video_url?: string | null;
+  /** Set for native social posts (instagram, x, …); empty for blog articles. */
+  social_platform?: string | null;
+  post_format?: string | null;
 };
 
 export type CalendarResponse = {
@@ -48,6 +55,7 @@ export type CalendarResponse = {
   year: number;
   posts_by_date: Record<string, CalendarPost[]>;
   total_posts: number;
+  connected_platforms?: string[];
 };
 
 export type CalendarPostPayload = {

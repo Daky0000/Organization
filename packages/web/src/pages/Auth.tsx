@@ -177,6 +177,12 @@ function Auth({ onLogin }: AuthProps) {
   const [signupName, setSignupName] = useState('');
   const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
+  // Username: pre-filled from the email until the person types their own.
+  const [signupUsername, setSignupUsername] = useState('');
+  const [usernameEdited, setUsernameEdited] = useState(false);
+  const [usernameCheck, setUsernameCheck] = useState<
+    { state: 'idle' | 'checking' | 'available' } | { state: 'unavailable'; reason: string; suggestions: string[] }
+  >({ state: 'idle' });
   const [showSignupPwd, setShowSignupPwd] = useState(false);
   const [acceptTerms, setAcceptTerms] = useState(true);
 
@@ -384,20 +390,62 @@ function Auth({ onLogin }: AuthProps) {
     }
   };
 
+  // ── Signup username ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (usernameEdited) return;
+    const local = signupEmail.split('@')[0] ?? '';
+    setSignupUsername(local.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/_+/g, '_').replace(/^[_-]+|[_-]+$/g, '').slice(0, 24));
+  }, [signupEmail, usernameEdited]);
+
+  // Debounced availability check; a stale answer for an older value is dropped.
+  useEffect(() => {
+    const value = signupUsername.trim();
+    if (mode !== 'signup' || !value) { setUsernameCheck({ state: 'idle' }); return; }
+    setUsernameCheck({ state: 'checking' });
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const qs = new URLSearchParams({ username: value, name: signupName.trim(), email: signupEmail.trim() });
+        const r = await fetch(`${API_BASE_URL}/api/auth/username-available?${qs}`);
+        const d = await r.json();
+        if (cancelled) return;
+        if (!r.ok || !d.success) { setUsernameCheck({ state: 'idle' }); return; }
+        setUsernameCheck(d.available
+          ? { state: 'available' }
+          : { state: 'unavailable', reason: String(d.reason || 'Not available'), suggestions: Array.isArray(d.suggestions) ? d.suggestions : [] });
+      } catch {
+        if (!cancelled) setUsernameCheck({ state: 'idle' });
+      }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+    // Name and email only shape the suggestions; re-checking on every keystroke there is not needed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signupUsername, mode]);
+
+  const pickUsername = (value: string) => {
+    setUsernameEdited(true);
+    setSignupUsername(value);
+    setErrorMessage(null);
+  };
+
   // ── Signup submit ───────────────────────────────────────────────────────────
   const handleSignupSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
-    if (!signupName.trim() || !signupEmail.trim() || !signupPassword.trim()) {
+    if (!signupName.trim() || !signupEmail.trim() || !signupUsername.trim() || !signupPassword.trim()) {
       setErrorMessage('Please fill in all fields.');
+      return;
+    }
+    if (usernameCheck.state === 'unavailable') {
+      setErrorMessage(`${usernameCheck.reason}. Pick another username${usernameCheck.suggestions.length ? ' or one of the suggestions' : ''}.`);
       return;
     }
     if (!signupEmail.includes('@')) {
       setErrorMessage('Please enter a valid email address.');
       return;
     }
-    if (signupPassword.length < 6) {
-      setErrorMessage('Password must be at least 6 characters.');
+    if (signupPassword.length < 8) {
+      setErrorMessage('Password must be at least 8 characters.');
       return;
     }
     if (!acceptTerms) {
@@ -406,24 +454,28 @@ function Auth({ onLogin }: AuthProps) {
     }
     setIsSubmitting(true);
     try {
-      const username = signupEmail
-        .split('@')[0]
-        .toLowerCase()
-        .replace(/[^a-z0-9_]/g, '_');
       const r = await fetch(`${API_BASE_URL}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: signupName.trim(),
-          username,
+          username: signupUsername.trim(),
           email: signupEmail.trim(),
           password: signupPassword,
         }),
       });
       const { data: d, rawText } = await safeJson<AuthResponse>(r);
       if (!d) throw new Error(`Server error (${r.status}): ${rawText.slice(0, 200) || 'empty'}`);
-      if (!r.ok || !d.success || !d.token || !d.user?.id || !d.user?.email)
-        throw new Error(d.error || 'Account creation failed');
+      // Taken between the check and the submit: show the suggestions under the field.
+      const taken = d as { code?: string; suggestions?: string[] };
+      if (taken.code === 'USERNAME_TAKEN') {
+        setUsernameCheck({ state: 'unavailable', reason: `"${signupUsername.trim()}" is already taken`, suggestions: taken.suggestions ?? [] });
+      }
+      if (!r.ok || !d.success || !d.token || !d.user?.id || !d.user?.email) {
+        // "Validation failed" alone tells nobody what to fix; show the field's reason.
+        const issue = (d as { issues?: Array<{ message?: string }> }).issues?.[0]?.message;
+        throw new Error(issue || d.error || 'Account creation failed');
+      }
       localStorage.setItem('auth_token', d.token);
       onLogin(
         normalizeUser({
@@ -699,12 +751,47 @@ function Auth({ onLogin }: AuthProps) {
           </label>
 
           <div className="os-login-field">
+            <label htmlFor="su-username">Username</label>
+            <input
+              id="su-username"
+              type="text"
+              placeholder="alexjordan"
+              value={signupUsername}
+              onChange={(e) => { setUsernameEdited(true); setSignupUsername(e.target.value); }}
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              required
+              aria-invalid={usernameCheck.state === 'unavailable'}
+              aria-describedby="su-username-status"
+              className="input"
+            />
+            <div id="su-username-status" className="un-status" aria-live="polite">
+              {usernameCheck.state === 'checking' && <span className="un-muted">Checking…</span>}
+              {usernameCheck.state === 'available' && <span className="un-ok">Available</span>}
+              {usernameCheck.state === 'unavailable' && (
+                <>
+                  <span className="un-bad">{usernameCheck.reason}.</span>
+                  {usernameCheck.suggestions.length > 0 && (
+                    <span className="un-suggest">
+                      Try:
+                      {usernameCheck.suggestions.map((s) => (
+                        <button key={s} type="button" onClick={() => pickUsername(s)}>{s}</button>
+                      ))}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="os-login-field">
             <label htmlFor="su-password">Password</label>
             <div className="pw-wrap">
               <input
                 id="su-password"
                 type={showSignupPwd ? 'text' : 'password'}
-                placeholder="At least 6 characters"
+                placeholder="At least 8 characters"
                 value={signupPassword}
                 onChange={(e) => setSignupPassword(e.target.value)}
                 autoComplete="new-password"

@@ -1,3 +1,4 @@
+import MarketingTourHub from '../components/tour/TourHub';
 import { useEffect, useState } from 'react';
 import { BarChart2, Loader2, Mail, Megaphone, Users } from 'lucide-react';
 import { mailingService, type MailingAnalytics } from '../services/mailingService';
@@ -68,7 +69,7 @@ export default function MarketingOverview({ navigateToPage }: { navigateToPage: 
       </div>
 
       {/* Email Health */}
-      <section>
+      <section data-tour="mk-email-health">
         <div className="mb-4 flex items-center gap-2">
           <Mail size={15} className="text-slate-400" />
           <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400">Email Health</h2>
@@ -82,7 +83,7 @@ export default function MarketingOverview({ navigateToPage }: { navigateToPage: 
       </section>
 
       {/* Campaign Overview */}
-      <section>
+      <section data-tour="mk-campaign-overview">
         <div className="mb-4 flex items-center gap-2">
           <Megaphone size={15} className="text-slate-400" />
           <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400">Campaign Overview</h2>
@@ -96,7 +97,7 @@ export default function MarketingOverview({ navigateToPage }: { navigateToPage: 
       </section>
 
       {/* Summary Cards */}
-      <section className="grid gap-5 lg:grid-cols-2">
+      <section data-tour="mk-summaries" className="grid gap-5 lg:grid-cols-2">
         {/* Email summary */}
         <div className="rounded-2xl border border-slate-200 bg-white p-6 space-y-4">
           <div className="flex items-center justify-between">
@@ -168,6 +169,9 @@ export default function MarketingOverview({ navigateToPage }: { navigateToPage: 
           )}
         </div>
       </section>
+
+      {/* Set-up order with a guided tour for each tool */}
+      <MarketingTourHub />
 
       {/* Quick links */}
       <section>

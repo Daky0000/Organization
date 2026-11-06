@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Loader2, MoreHorizontal, Plus } from 'lucide-react';
 import { calendarService, type CalendarPost, type CalendarPostPayload, type CalendarPostStatus } from '../../services/calendarService';
+import { PlatformLogo } from '../PlatformLogo';
+import SocialPostModal from '../social/SocialPostModal';
+import { BLOG_META, FORMAT_LABEL, PLATFORM_META, mediaOf, platformId, type SocialPlatformId } from '../social/socialMeta';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -71,6 +74,10 @@ export default function ScheduleCalendar() {
   const [formScheduledAt, setFormScheduledAt] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [filter, setFilter] = useState('All');
+  const [connectedPlatforms, setConnectedPlatforms] = useState<string[]>([]);
+  const [socialPost, setSocialPost] = useState<CalendarPost | null>(null);
+  /** Legend filter: show only one platform's posts (null = all). */
+  const [onlyPlatform, setOnlyPlatform] = useState<string | null>(null);
 
   const monthLabel = useMemo(() => {
     return currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -130,6 +137,7 @@ export default function ScheduleCalendar() {
       const month = currentDate.getMonth() + 1;
       const data = await calendarService.getCalendar(year, month);
       setCalendarPosts(data.posts_by_date || {});
+      setConnectedPlatforms(data.connected_platforms || []);
       const drafts = await calendarService.listPosts('draft');
       setUnscheduledPosts(drafts);
     } catch (err) {
@@ -149,6 +157,7 @@ export default function ScheduleCalendar() {
       const month = currentDate.getMonth() + 1;
       const data = await calendarService.getCalendar(year, month);
       setCalendarPosts(data.posts_by_date || {});
+      setConnectedPlatforms(data.connected_platforms || []);
       const drafts = await calendarService.listPosts('draft');
       setUnscheduledPosts(drafts);
     } catch (err) {
@@ -172,6 +181,8 @@ export default function ScheduleCalendar() {
   };
 
   const handleEdit = (post: CalendarPost) => {
+    // Social posts open as they will look on their platform.
+    if (platformId(post.social_platform)) { setViewMoreKey(null); setSocialPost(post); return; }
     setEditingPost(post);
     setEditorDateKey(null);
     setFormTitle(post.title || '');
@@ -253,6 +264,25 @@ export default function ScheduleCalendar() {
 
   const todayKey = toUtcDateKey(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate());
 
+  // Legend: every platform with a post this month, plus every connected one.
+  const legend = useMemo(() => {
+    const present = new Map<string, number>();
+    let blog = 0;
+    for (const list of Object.values(calendarPosts)) {
+      for (const p of list) {
+        const id = platformId(p.social_platform);
+        if (id) present.set(id, (present.get(id) ?? 0) + 1); else blog++;
+      }
+    }
+    const ids = new Set<string>([...present.keys(), ...connectedPlatforms.map((c) => platformId(c)).filter(Boolean) as string[]]);
+    const order = Object.keys(PLATFORM_META);
+    return {
+      platforms: [...ids].sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((id) => ({ id: id as SocialPlatformId, count: present.get(id) ?? 0, connected: connectedPlatforms.some((c) => platformId(c) === id) })),
+      blog,
+    };
+  }, [calendarPosts, connectedPlatforms]);
+  const visible = (post: CalendarPost) => !onlyPlatform || (onlyPlatform === 'blog' ? !platformId(post.social_platform) : platformId(post.social_platform) === onlyPlatform);
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -296,6 +326,41 @@ export default function ScheduleCalendar() {
         <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>
       ) : null}
 
+      {/* Legend: what each colour means; click one to show only that platform. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2.5">
+        <span className="mr-1 text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-400">Platforms</span>
+        {legend.platforms.length === 0 && legend.blog === 0 ? (
+          <span className="text-xs text-slate-500">No posts this month yet — ask Daky for a content calendar and each platform will show here in its colour.</span>
+        ) : null}
+        {legend.platforms.map(({ id, count, connected }) => {
+          const m = PLATFORM_META[id];
+          const active = onlyPlatform === id;
+          return (
+            <button key={id} type="button" onClick={() => setOnlyPlatform(active ? null : id)}
+              title={connected ? `${m.label} — connected` : `${m.label} — not connected: posts won't publish until you connect it`}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition ${active ? 'ring-2 ring-offset-1' : ''}`}
+              style={{ borderColor: m.color, background: active ? m.color : m.soft, color: active ? '#fff' : m.color }}>
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: active ? '#fff' : m.color }} />
+              <PlatformLogo platform={id} size={14} />
+              {m.label}
+              {count > 0 && <span className="tabular-nums opacity-80">· {count}</span>}
+              {!connected && <span className="rounded-full bg-amber-100 px-1.5 text-[9px] font-bold uppercase text-amber-700">Not connected</span>}
+            </button>
+          );
+        })}
+        {legend.blog > 0 && (
+          <button type="button" onClick={() => setOnlyPlatform(onlyPlatform === 'blog' ? null : 'blog')}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${onlyPlatform === 'blog' ? 'ring-2 ring-offset-1' : ''}`}
+            style={{ borderColor: BLOG_META.color, background: onlyPlatform === 'blog' ? BLOG_META.color : BLOG_META.soft, color: onlyPlatform === 'blog' ? '#fff' : '#B45309' }}>
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: onlyPlatform === 'blog' ? '#fff' : BLOG_META.color }} />
+            {BLOG_META.label} <span className="tabular-nums opacity-80">· {legend.blog}</span>
+          </button>
+        )}
+        {onlyPlatform && (
+          <button type="button" onClick={() => setOnlyPlatform(null)} className="ml-auto text-xs font-semibold text-slate-500 hover:text-slate-800">Show all</button>
+        )}
+      </div>
+
       <div className="grid gap-6 lg:grid-cols-[1.4fr_0.6fr]">
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           {loading ? (
@@ -314,7 +379,7 @@ export default function ScheduleCalendar() {
 
               <div className="mt-2 grid grid-cols-7 gap-2">
                 {calendarDays.map((day) => {
-                  const dayPosts = calendarPosts[day.dateKey] || [];
+                  const dayPosts = (calendarPosts[day.dateKey] || []).filter(visible);
                   const isToday = day.dateKey === todayKey;
                   return (
                     <div
@@ -433,10 +498,25 @@ export default function ScheduleCalendar() {
         </div>
       </div>
 
+      {socialPost && platformId(socialPost.social_platform) ? (
+        <SocialPostModal
+          post={socialPost}
+          platform={platformId(socialPost.social_platform)!}
+          connected={connectedPlatforms.some((c) => platformId(c) === platformId(socialPost.social_platform))}
+          onClose={() => setSocialPost(null)}
+          onSave={async (patch) => {
+            await calendarService.updatePost(socialPost.id, { ...patch, status: patch.status as CalendarPostStatus });
+            setSocialPost(null);
+            await refreshPosts();
+          }}
+          onDelete={() => { const p = socialPost; setSocialPost(null); void handleDelete(p); }}
+        />
+      ) : null}
+
       {viewMoreKey ? (
         <ViewMoreModal
           dateKey={viewMoreKey}
-          posts={calendarPosts[viewMoreKey] || []}
+          posts={(calendarPosts[viewMoreKey] || []).filter(visible)}
           onClose={() => setViewMoreKey(null)}
           onEdit={handleEdit}
           onDelete={handleDelete}
@@ -475,9 +555,18 @@ function PostCard({
   onDragEnd: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const pid = platformId(post.social_platform);
+  const meta = pid ? PLATFORM_META[pid] : null;
+  const media = mediaOf(post);
+  const thumb = media[0];
+  const fmt = String(post.post_format || (pid ? 'single_image' : 'blog'));
+  const snippet = pid ? String(post.content || '').replace(/<[^>]+>/g, '').split('\n').find((l) => l.trim()) || post.title : post.title;
   return (
     <div
-      className={`relative rounded-lg border-l-4 px-2 py-2 text-xs transition hover:shadow-sm ${getCardBorder(post.status)}`}
+      className={`relative cursor-pointer rounded-lg border-l-4 px-2 py-2 text-xs transition hover:shadow-sm ${meta ? '' : getCardBorder(post.status)}`}
+      style={meta ? { borderLeftColor: meta.color, background: meta.soft } : { borderLeftColor: BLOG_META.color }}
+      onClick={() => onEdit(post)}
+      title={meta ? `${meta.label} ${FORMAT_LABEL[fmt] ?? ''} — click to preview and edit` : 'Click to edit'}
       draggable
       onDragStart={() => onDragStart(post)}
       onDragEnd={() => {
@@ -486,21 +575,33 @@ function PostCard({
       }}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+        <span className="flex items-center gap-1 whitespace-nowrap rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+          {pid ? <PlatformLogo platform={pid} size={12} /> : null}
           {formatTime(getCalendarTimestamp(post)) || 'Draft'}
         </span>
         <button
           type="button"
-          onClick={() => setOpen((prev) => !prev)}
+          onClick={(e) => { e.stopPropagation(); setOpen((prev) => !prev); }}
           className="text-slate-400 hover:text-slate-600"
           aria-label="Post actions"
         >
           <MoreHorizontal size={14} />
         </button>
       </div>
-      <div className="mt-1 truncate text-sm font-semibold text-slate-900">{post.title}</div>
-      <div className="mt-1 flex items-center gap-1.5">
-        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">POST</span>
+      <div className="mt-1 flex items-start gap-1.5">
+        {thumb ? (
+          <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-md bg-slate-200">
+            {thumb.type === 'video' ? <video src={thumb.url} className="h-full w-full object-cover" muted preload="metadata" /> : <img src={thumb.url} alt="" className="h-full w-full object-cover" loading="lazy" />}
+            {media.length > 1 && <span className="absolute bottom-0 right-0 rounded-tl bg-black/60 px-0.5 text-[8px] font-bold text-white">{media.length}</span>}
+          </span>
+        ) : null}
+        <div className="min-w-0 flex-1 truncate text-[12.5px] font-semibold leading-tight text-slate-900">{snippet}</div>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-1">
+        <span className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+          style={meta ? { background: '#fff', color: meta.color } : { background: '#FFEDD5', color: '#C2410C' }}>
+          {meta ? `${meta.label} ${FORMAT_LABEL[fmt] ?? ''}`.trim() : 'ARTICLE'}
+        </span>
         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${getStatusBadge(post.status)}`}>
           {String(post.status).toUpperCase()}
         </span>
@@ -509,17 +610,19 @@ function PostCard({
         <div className="absolute right-2 top-8 z-20 w-28 rounded-lg border border-slate-200 bg-white shadow-lg">
           <button
             type="button"
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               onEdit(post);
               setOpen(false);
             }}
             className="w-full px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
           >
-            Edit
+            {pid ? 'Preview & edit' : 'Edit'}
           </button>
           <button
             type="button"
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               onDelete(post);
               setOpen(false);
             }}
@@ -563,7 +666,11 @@ function ViewMoreModal({
           {posts.map((post) => (
             <div key={post.id} className="rounded-xl border border-slate-200 bg-white p-3">
               <div className="flex items-center justify-between">
-                <div className="text-xs font-semibold text-slate-500">{formatTime(getCalendarTimestamp(post))}</div>
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+                  {platformId(post.social_platform) ? <PlatformLogo platform={platformId(post.social_platform)!} size={14} /> : null}
+                  {formatTime(getCalendarTimestamp(post))}
+                  {platformId(post.social_platform) ? <span style={{ color: PLATFORM_META[platformId(post.social_platform)!].color }}>{PLATFORM_META[platformId(post.social_platform)!].label} {FORMAT_LABEL[String(post.post_format || '')] ?? ''}</span> : null}
+                </div>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"

@@ -20,6 +20,8 @@ import {
   Zap,
   Globe,
   Wand2,
+  Cpu,
+  Activity,
 } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { AppUser, clearStoredUser } from '../utils/userSession';
@@ -41,6 +43,8 @@ const AdminApify = lazy(() => import('../components/admin/AdminApify'));
 const AdminLearn = lazy(() => import('../components/admin/AdminLearn'));
 const AdminAgents = lazy(() => import('../components/admin/AdminAgents'));
 const AdminMagnific = lazy(() => import('../components/admin/AdminMagnific'));
+const AdminNvidia = lazy(() => import('../components/admin/AdminNvidia'));
+const AdminAIOps = lazy(() => import('../components/admin/AdminAIOps'));
 const AdminKling = lazy(() => import('../components/admin/AdminKling'));
 const AdminGoogle = lazy(() => import('../components/admin/AdminGoogle'));
 const AdminOpenAI = lazy(() => import('../components/admin/AdminOpenAI'));
@@ -75,11 +79,13 @@ const Admin = ({ currentUser }: AdminProps) => {
     | 'media'
     | 'ai-config'
     | 'ai-skills'
+    | 'ai-ops'
     | 'billing'
     | 'apify'
     | 'learn'
     | 'agents'
     | 'magnific'
+    | 'nvidia'
     | 'kling'
     | 'google'
     | 'openai'
@@ -106,11 +112,13 @@ const Admin = ({ currentUser }: AdminProps) => {
     media: '/admin/media',
     'ai-config': '/admin/ai',
     'ai-skills': '/admin/ai/skills',
+    'ai-ops': '/admin/ai/ops',
     billing: '/admin/billing',
     apify: '/admin/apify',
     learn: '/admin/learn',
     agents: '/admin/agents',
     magnific: '/admin/magnific',
+    nvidia: '/admin/nvidia',
     kling: '/admin/kling',
     google: '/admin/google',
     openai: '/admin/openai',
@@ -138,11 +146,13 @@ const Admin = ({ currentUser }: AdminProps) => {
     media: 'Media Library',
     'ai-config': 'AI Configuration',
     'ai-skills': 'Create AI Skill',
+    'ai-ops': 'AI Ops — monitoring, guardrails, evals',
     billing: 'Subscriptions',
     apify: 'Apify Actors & Runs',
     learn: 'Daky Learn',
     agents: 'Agent Team',
     magnific: 'Magnific AI',
+    nvidia: 'NVIDIA (free models)',
     kling: 'Kling AI',
     google: 'Google AI',
     openai: 'OpenAI',
@@ -163,7 +173,7 @@ const Admin = ({ currentUser }: AdminProps) => {
   const [activeTab, setActiveTab] = useState<AdminTab>(getInitialTab);
   const [pagesOpen, setPagesOpen] = useState(() => window.location.pathname.startsWith('/admin/pages'));
   const [aiOpen, setAiOpen] = useState(() =>
-    ['/admin/ai', '/admin/learn', '/admin/magnific', '/admin/kling', '/admin/google', '/admin/openai', '/admin/higgsfield'].some((p) =>
+    ['/admin/ai', '/admin/learn', '/admin/magnific', '/admin/nvidia', '/admin/kling', '/admin/google', '/admin/openai', '/admin/higgsfield'].some((p) =>
       window.location.pathname.startsWith(p)
     )
   );
@@ -218,7 +228,9 @@ const Admin = ({ currentUser }: AdminProps) => {
   const aiItems: { id: AdminTab; label: string; icon: React.ElementType }[] = [
     { id: 'ai-config', label: 'Configuration', icon: Bot },
     { id: 'ai-skills', label: 'Create AI Skill', icon: Zap },
+    { id: 'ai-ops', label: 'AI Ops', icon: Activity },
     { id: 'learn', label: 'Daky Learn', icon: BookOpen },
+    { id: 'nvidia', label: 'NVIDIA (free)', icon: Cpu },
     { id: 'magnific', label: 'Magnific AI', icon: Wand2 },
     { id: 'kling', label: 'Kling AI', icon: Clapperboard },
     { id: 'google', label: 'Google AI', icon: Globe },
@@ -228,7 +240,7 @@ const Admin = ({ currentUser }: AdminProps) => {
 
   const isPagesActive = activeTab.startsWith('pages-');
   const isAIActive =
-    activeTab.startsWith('ai-') || ['learn', 'magnific', 'kling', 'google', 'openai', 'higgsfield'].includes(activeTab);
+    activeTab.startsWith('ai-') || ['learn', 'magnific', 'nvidia', 'kling', 'google', 'openai', 'higgsfield'].includes(activeTab);
   const isApifyActive = activeTab === 'apify';
 
   useEffect(() => {
@@ -238,7 +250,7 @@ const Admin = ({ currentUser }: AdminProps) => {
         setActiveTab(tab);
         setPagesOpen(tab.startsWith('pages-'));
         setAiOpen(
-          tab.startsWith('ai-') || ['learn', 'magnific', 'kling', 'google', 'openai', 'higgsfield'].includes(tab)
+          tab.startsWith('ai-') || ['learn', 'magnific', 'nvidia', 'kling', 'google', 'openai', 'higgsfield'].includes(tab)
         );
         setApifyOpen(tab === 'apify');
       }
@@ -538,12 +550,14 @@ const Admin = ({ currentUser }: AdminProps) => {
               {activeTab === 'media' && <AdminMediaManagement />}
               {activeTab === 'ai-config' && <AdminAIConfig />}
               {activeTab === 'ai-skills' && <AdminAISkills />}
+              {activeTab === 'ai-ops' && <AdminAIOps />}
               {activeTab === 'billing' && <AdminBillingDashboard />}
               {activeTab === 'apify' && <AdminApify />}
               {activeTab === 'mcp' && <AdminMCP />}
               {activeTab === 'learn' && <AdminLearn />}
               {activeTab === 'agents' && <AdminAgents />}
               {activeTab === 'magnific' && <AdminMagnific />}
+              {activeTab === 'nvidia' && <AdminNvidia />}
               {activeTab === 'kling' && <AdminKling />}
               {activeTab === 'google' && <AdminGoogle />}
               {activeTab === 'openai' && <AdminOpenAI />}

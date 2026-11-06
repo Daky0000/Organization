@@ -1,4 +1,5 @@
 import express from 'express';
+import { KLING_IMAGE_USD, KLING_VIDEO_USD_5S, creditsForUsd } from './aiPricing.ts';
 import { chargeAICredits } from '../ai-helpers.ts';
 import { generationLimiter } from '../middleware/rateLimiter.ts';
 import type { Router, Response } from 'express';
@@ -184,7 +185,9 @@ export function registerKlingRoutes({ requireAuth, requireAdmin, hasDatabase, po
     if (!prompt.trim()) return res.status(400).json({ error: 'Prompt is required' });
     const useImageToVideo = !!image_url.trim();
     const modelCfg = KLING_VIDEO_MODELS[model] ?? KLING_VIDEO_MODELS['kling-v2.5-turbo'];
-    const creditCost = modelCfg.credits;
+    void modelCfg;
+    // Kling bills per 5 seconds: cost × 1.54 (server/aiPricing.ts).
+    const creditCost = creditsForUsd((KLING_VIDEO_USD_5S[KLING_VIDEO_MODELS[model] ? model : 'kling-v2.5-turbo'] ?? 0.49) * (Math.max(Number(duration) || 5, 5) / 5));
     const credRow = await pool.query<{ credits: number }>('SELECT credits FROM user_credits WHERE user_id=$1', [auth.userId])
       .catch(() => ({ rows: [] as { credits: number }[] }));
     const currentCredits = credRow.rows[0]?.credits ?? 0;
@@ -265,7 +268,9 @@ export function registerKlingRoutes({ requireAuth, requireAdmin, hasDatabase, po
     if (!prompt.trim()) return res.status(400).json({ error: 'Prompt is required' });
     if (!image_url.trim()) return res.status(400).json({ error: 'image_url is required' });
     const modelCfg = KLING_VIDEO_MODELS[model] ?? KLING_VIDEO_MODELS['kling-v2.5-turbo'];
-    const creditCost = modelCfg.credits;
+    void modelCfg;
+    // Kling bills per 5 seconds: cost × 1.54 (server/aiPricing.ts).
+    const creditCost = creditsForUsd((KLING_VIDEO_USD_5S[KLING_VIDEO_MODELS[model] ? model : 'kling-v2.5-turbo'] ?? 0.49) * (Math.max(Number(duration) || 5, 5) / 5));
     const credRow = await pool.query<{ credits: number }>('SELECT credits FROM user_credits WHERE user_id=$1', [auth.userId])
       .catch(() => ({ rows: [] as { credits: number }[] }));
     const currentCredits = credRow.rows[0]?.credits ?? 0;
@@ -316,7 +321,8 @@ export function registerKlingRoutes({ requireAuth, requireAdmin, hasDatabase, po
     const { prompt = '', model = 'kling-v1-5', aspect_ratio = '1:1' } = req.body as Record<string, any>;
     if (!prompt.trim()) return res.status(400).json({ error: 'Prompt is required' });
     const modelCfg = KLING_IMAGE_MODELS[model] ?? KLING_IMAGE_MODELS['kling-v1-5'];
-    const creditCost = modelCfg.credits;
+    void modelCfg;
+    const creditCost = creditsForUsd(KLING_IMAGE_USD);
     const credRow = await pool.query<{ credits: number }>('SELECT credits FROM user_credits WHERE user_id=$1', [auth.userId])
       .catch(() => ({ rows: [] as { credits: number }[] }));
     const currentCredits = credRow.rows[0]?.credits ?? 0;

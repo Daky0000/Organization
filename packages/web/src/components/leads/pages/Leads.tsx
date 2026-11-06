@@ -211,7 +211,7 @@ export function Leads({
         title={title}
         subtitle={subtitle}
         action={
-          <div className="flex items-center gap-3">
+          <div data-tour="leads-actions" className="flex items-center gap-3">
             <Button variant="ghost" size="sm" onClick={() => setColumnsFor(filters.groupId || null)}>
               Columns
             </Button>
@@ -231,7 +231,7 @@ export function Leads({
       />
 
       {stats && (
-        <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div data-tour="leads-stats" className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <StatTile label="Leads" value={stats.total} sub={`${stats.newThisWeek} added this week`} />
           <StatTile
             label="Reachable"
@@ -662,7 +662,7 @@ function FilterBar({
     list.includes(value) ? list.filter((entry) => entry !== value) : [...list, value];
 
   return (
-    <div className="mb-6 border border-ink/10 bg-white">
+    <div data-tour="leads-filters" className="mb-6 border border-ink/10 bg-white">
       <div className="flex flex-wrap items-center gap-3 border-b border-ink/5 px-4 py-3">
         <input
           value={filters.q}

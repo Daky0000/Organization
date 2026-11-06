@@ -1,3 +1,5 @@
+import { tourAction } from '../components/tour/tourCore';
+import { useTourTab } from '../components/tour/useTourTab';
 import { useEffect, useState } from 'react';
 import {
   BarChart2, CheckCircle, Clock, Loader2, Mail, MousePointerClick,
@@ -265,6 +267,7 @@ function EmailsTab() {
         </div>
         <button
           data-tour-id="btn-new-email"
+          data-tour="email-compose"
           onClick={openNew}
           className="flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
         >
@@ -285,7 +288,7 @@ function EmailsTab() {
           </button>
         </div>
       ) : (
-        <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+        <div data-tour="email-list" className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
           {emails.map((email, i) => {
             const c = STATUS_COLORS[email.status] ?? STATUS_COLORS.draft;
             const isLast = i === emails.length - 1;
@@ -765,6 +768,7 @@ function LeadsTab() {
 
 export default function MarketingEmail() {
   const [tab, setTab] = useState<Tab>('emails');
+  useTourTab('email', TABS.map((t) => t.id), setTab);
 
   return (
     <div className="space-y-6 pb-8">
@@ -773,12 +777,13 @@ export default function MarketingEmail() {
         <p className="mt-2 text-base text-slate-500">Compose, send and track emails to your contacts.</p>
       </div>
 
-      <div className="flex items-center gap-1 border-b border-slate-200">
+      <div data-tour="email-tabs" className="flex items-center gap-1 border-b border-slate-200">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             type="button"
-            onClick={() => setTab(id)}
+            data-tour={`tab-email-${id}`}
+            onClick={() => { setTab(id); tourAction(`email-tab:${id}`); }}
             className={`flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 transition-colors -mb-px ${
               tab === id ? 'border-slate-950 text-slate-950' : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}

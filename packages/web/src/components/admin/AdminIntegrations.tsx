@@ -307,6 +307,22 @@ const PLATFORMS: PlatformDef[] = [
     ],
   },
   {
+    id: 'google_sheets',
+    name: 'Google Sheets',
+    description: 'OAuth credentials for importing leads from Google Sheets. Overrides the GOOGLE_SHEETS_CLIENT_ID / GOOGLE_SHEETS_CLIENT_SECRET environment variables.',
+    fields: [
+      { id: 'clientId', label: 'Client ID', placeholder: 'Google OAuth Client ID', type: 'text', helpText: 'Same Client ID as Gmail if using the same Google Cloud project.' },
+      { id: 'clientSecret', label: 'Client Secret', placeholder: 'Google OAuth Client Secret', type: 'password', helpText: 'Same Client Secret as Gmail if using the same Google Cloud project.' },
+    ],
+    docsUrl: 'https://developers.google.com/sheets/api/guides/concepts',
+    redirectHint: 'Add both `/api/google-sheets/callback` and `/api/leads/google-sheets/callback` on the backend to Authorized redirect URIs. Enable the Google Sheets API in Google Cloud Console.',
+    setupSteps: [
+      'In Google Cloud Console → APIs & Services → Library, enable the Google Sheets API.',
+      'Reuse your Gmail OAuth 2.0 Client ID and Client Secret or create a dedicated one, and paste them below.',
+      'Add `/api/google-sheets/callback` and `/api/leads/google-sheets/callback` on the backend to Authorized redirect URIs.',
+    ],
+  },
+  {
     id: 'slack',
     name: 'Slack',
     description: 'OAuth credentials for sending workflow notifications and agent alerts to Slack workspaces.',
@@ -405,6 +421,7 @@ const PLATFORMS: PlatformDef[] = [
       { id: 'apiKey', label: 'API Key', placeholder: 're_...', type: 'password', helpText: 'From resend.com → API Keys. Create a key with full access.' },
       { id: 'fromEmail', label: 'From Email', placeholder: 'noreply@yourdomain.com', type: 'text', helpText: 'Must be a verified domain or address in your Resend account.' },
       { id: 'fromName', label: 'From Name', placeholder: 'DakyXTech', type: 'text', helpText: 'Display name shown to recipients in the From field.' },
+      { id: 'webhookSecret', label: 'Webhook Signing Secret (Optional)', placeholder: 'whsec_...', type: 'password', helpText: 'From resend.com → Webhooks, for the `/webhooks/resend` endpoint. Opens, clicks and bounces are discarded in production without it. Overrides RESEND_WEBHOOK_SECRET.' },
     ],
     docsUrl: 'https://resend.com/docs',
     redirectHint: 'Verify your sending domain in the Resend dashboard before going live.',

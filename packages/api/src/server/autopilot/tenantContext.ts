@@ -20,6 +20,36 @@ export interface AutopilotTenantContext {
 
 const SAFE_SCOPE_ID_RE = /^[a-zA-Z0-9_-]{2,128}$/;
 
+/**
+ * Re-checks, from the database, that a user may still publish for a tenant.
+ * Background jobs call this before every external side effect instead of
+ * trusting the role the user had when the job was queued. Fails closed.
+ */
+export async function verifyTenantPublisher(pool: Pick<Pool, 'query'> | null, hasDatabase: () => boolean, tenantId: string, userId: string): Promise<boolean> {
+  if (tenantId === `user:${userId}` || tenantId.startsWith(`user:${userId}:`)) return true;
+  if (tenantId.startsWith('user:')) return false;
+  if (!pool || !hasDatabase()) return false;
+  try {
+    let orgId: string | null = null;
+    if (tenantId.startsWith('proj:')) {
+      const p = await pool.query(`SELECT org_id FROM projects WHERE id = $1 LIMIT 1`, [tenantId.slice(5)]);
+      orgId = p.rows[0]?.org_id ? String(p.rows[0].org_id) : null;
+    } else if (tenantId.startsWith('org:')) {
+      orgId = tenantId.slice(4);
+    }
+    if (!orgId) return false;
+    const m = await pool.query(`SELECT role FROM organization_memberships WHERE org_id = $1 AND user_id = $2 LIMIT 1`, [orgId, userId]);
+    let role = (m.rows[0]?.role as string | undefined) ?? null;
+    if (!role) {
+      const o = await pool.query(`SELECT 1 FROM organizations WHERE id = $1 AND owner_id = $2 LIMIT 1`, [orgId, userId]);
+      if (o.rows.length) role = 'owner';
+    }
+    return role === 'owner' || role === 'admin';
+  } catch {
+    return false;
+  }
+}
+
 function pickHeaderOrParam(req: Request, headerName: string, queryKey: string, bodyKey: string): string | null {
   const fromHeader = req.headers[headerName];
   const raw =
@@ -143,8 +173,9 @@ export async function resolveAutopilotTenant(
     : '';
   const tenantId = safeSubKey ? `user:${auth.userId}:${safeSubKey}` : `user:${auth.userId}`;
 
-  // Allow test/role simulation header ONLY if narrowing own role (never elevating!)
-  const simulatedRoleHeader = String(req.headers['x-autopilot-role'] || '').toLowerCase();
+  // Role simulation (tests, demos) may only narrow the user's own role, and is
+  // ignored entirely in production.
+  const simulatedRoleHeader = process.env.NODE_ENV === 'production' ? '' : String(req.headers['x-autopilot-role'] || '').toLowerCase();
   const effectiveRole: TenantRole =
     simulatedRoleHeader === 'viewer' || simulatedRoleHeader === 'editor' || simulatedRoleHeader === 'admin'
       ? (simulatedRoleHeader as TenantRole)

@@ -111,6 +111,12 @@ export async function publishDuePosts(deps?: Partial<PublishDuePostsDeps>) {
         AND scheduled_at<=NOW()
         AND COALESCE(approval_status, 'not_required') NOT IN ('pending', 'review_required', 'rejected', 'needs_changes')
         AND COALESCE(post_format, 'blog') != 'social_only'
+        -- A native social post goes out only through a connected account; without
+        -- one it stays scheduled (the calendar asks to connect) instead of
+        -- being marked published while nothing was posted.
+        AND (blog_posts.social_platform IS NULL OR EXISTS (
+          SELECT 1 FROM social_post_settings s JOIN social_post_targets t ON t.social_post_id = s.id
+          WHERE s.post_id = blog_posts.id AND t.enabled = true))
       RETURNING *
     ) INSERT INTO publication_outbox(id,post_id,user_id,payload)
       SELECT id,id,user_id,to_jsonb(published) FROM published ON CONFLICT(id) DO NOTHING`);

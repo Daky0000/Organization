@@ -54,6 +54,17 @@ export const authLimiter = rateLimit({
   ...makeStore('rl:auth', AUTH_WINDOW_MS),
 });
 
+// The sign-up form checks the username as it is typed (debounced), so this is
+// looser than authLimiter but still stops bulk username enumeration.
+export const usernameCheckLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: true,
+  message: { success: false, error: 'Too many checks, please slow down' },
+  ...makeStore('rl:username', ONE_MINUTE_MS),
+});
+
 export const passwordLimiter = rateLimit({
   windowMs: PWD_WINDOW_MS,
   max: 5,

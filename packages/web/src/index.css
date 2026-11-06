@@ -379,6 +379,15 @@ button.os-financial-detail:hover { background: var(--os-soft); }
 .os-login-foot a, .os-login-foot button { color: var(--os-muted); text-decoration: underline; text-underline-offset: 3px; }
 .os-login-foot a:hover, .os-login-foot button:hover { color: var(--os-ink); }
 
+/* Sign-up username: availability and suggestions */
+.un-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 18px; margin-top: 6px; font-size: 12px; }
+.un-muted { color: var(--os-muted); }
+.un-ok { color: #157A3A; }
+.un-bad { color: #B42318; }
+.un-suggest { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--os-muted); }
+.un-suggest button { padding: 2px 8px; border: 1px solid var(--os-line); border-radius: 999px; background: var(--os-soft); color: var(--os-blue); font-size: 12px; }
+.un-suggest button:hover { border-color: var(--os-blue); background: var(--os-pale); }
+
 /* Passwords: reveal, strength and guide */
 .pw-wrap { position: relative; }
 .pw-input { padding-right: 46px !important; }

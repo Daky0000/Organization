@@ -637,8 +637,9 @@ export function registerMcpMediaRoutes({ requireAuth, pool }: UserDeps): Router 
 
       if (!(await hasAICredits(auth.userId))) return res.status(402).json({ success: false, error: 'Out of AI credits' });
 
-      const googleKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY
-        || (await pool.query(`SELECT config FROM platform_configs WHERE platform='google'`).then(r => decryptPlatformConfig(r.rows[0]?.config)?.api_key ?? null).catch(() => null));
+      // Admin-configured key (AI Assistant → Google AI) wins; env is fallback only
+      const googleKey = (await pool.query(`SELECT config FROM platform_configs WHERE platform='google'`).then(r => decryptPlatformConfig(r.rows[0]?.config)?.api_key ?? null).catch(() => null))
+        || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
       if (!googleKey) return res.status(503).json({ success: false, error: 'Google AI is not configured (needed for text extraction)' });
 
       const img = await safeAxios<ArrayBuffer>({ method: 'GET', url, responseType: 'arraybuffer', timeout: 20_000, validateStatus: () => true });

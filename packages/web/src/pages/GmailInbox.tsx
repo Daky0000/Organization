@@ -226,7 +226,10 @@ function ContactPanel({
     } catch { /* ignore */ }
   }, []);
 
+  // A summary that exists is only replaced after the user confirms (it uses AI credits).
+  const [confirmRegen, setConfirmRegen] = useState(false);
   const generateSummary = async () => {
+    setConfirmRegen(false);
     setLoadingAI(true);
     setAiError(null);
     try {
@@ -325,7 +328,7 @@ function ContactPanel({
             </div>
             <button
               type="button"
-              onClick={generateSummary}
+              onClick={() => (aiSummary ? setConfirmRegen(true) : void generateSummary())}
               disabled={loadingAI}
               className="flex items-center gap-1 rounded-lg bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-600 hover:bg-indigo-100 disabled:opacity-60"
             >
@@ -333,6 +336,13 @@ function ContactPanel({
               {aiSummary ? 'Regenerate' : 'Generate'}
             </button>
           </div>
+          {confirmRegen && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-2.5 py-1.5 text-[11px] text-slate-600">
+              <span>Write a new summary? It replaces this one and uses about 1 AI credit.</span>
+              <button type="button" onClick={() => void generateSummary()} className="rounded-md bg-indigo-600 px-2 py-0.5 font-semibold text-white hover:bg-indigo-700">Yes</button>
+              <button type="button" onClick={() => setConfirmRegen(false)} className="rounded-md bg-white px-2 py-0.5 font-semibold text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50">No</button>
+            </div>
+          )}
 
           {aiError && <p className="mt-2 text-xs text-red-500">{aiError}</p>}
 

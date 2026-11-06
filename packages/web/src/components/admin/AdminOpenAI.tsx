@@ -5,9 +5,9 @@ import { getApiBaseUrl } from '../../utils/apiBase';
 const tok = () => localStorage.getItem('auth_token') ?? '';
 
 const IMAGE_MODELS = [
-  { id: 'dall-e-2',    label: 'DALL·E 2',    credits: 3,  tier: 'Fast',    desc: 'Fast generation, 1024×1024'               },
-  { id: 'dall-e-3',    label: 'DALL·E 3',    credits: 6,  tier: 'Quality', desc: 'High quality, vivid or natural style'      },
-  { id: 'gpt-image-1', label: 'GPT Image 1', credits: 8,  tier: 'Premium', desc: 'Latest model — best instruction-following' },
+  // DALL·E 2/3 and GPT Image 1 were shut down by OpenAI (2026-05-12, 2026-10-23).
+  { id: 'gpt-image-2.5-flare',    label: 'GPT Image 2.5 Flare',    credits: 8,  tier: 'Fast',    desc: 'Fast, high-quality everyday generation' },
+  { id: 'gpt-image-2.5-sunburst', label: 'GPT Image 2.5 Sunburst', credits: 12, tier: 'Premium', desc: 'Most capable; best for text in images'  },
 ];
 
 const TTS_MODELS = [

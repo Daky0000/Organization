@@ -8,6 +8,7 @@ import type { Pool } from 'pg';
 import { config } from '../config.ts';
 import { logger } from '../logger.ts';
 import { META_GRAPH_BASE } from '../meta-graph.ts';
+import { magnificTaskUrls } from './magnificRoutes.ts';
 
 export interface WebhookDeps {
   hasDatabase: () => boolean;
@@ -31,23 +32,37 @@ export interface WebhookDeps {
 
 // ─── Local helpers ─────────────────────────────────────────────────────────────
 
-// Resend signs webhooks with Svix: base64 HMAC-SHA256 of "{id}.{timestamp}.{body}"
-// keyed by the base64 portion of the whsec_… secret. The signature header may
-// contain several space-separated "v1,<sig>" entries.
-function verifySvixSignature(req: Request, secret: string): boolean {
+// Standard Webhooks (Svix): base64 HMAC-SHA256 of "{id}.{timestamp}.{body}",
+// sent in {prefix}-id / {prefix}-timestamp / {prefix}-signature headers. The
+// signature header may contain several space-separated "v1,<sig>" entries.
+// Senders differ on how the secret becomes the HMAC key, so callers pass keys.
+export function verifyStandardWebhook(req: Request, headerPrefix: 'svix' | 'webhook', keys: Buffer[]): boolean {
   const raw = (req as any).rawBody as Buffer | undefined;
-  const svixId = String(req.headers['svix-id'] || '');
-  const svixTimestamp = String(req.headers['svix-timestamp'] || '');
-  const svixSignature = String(req.headers['svix-signature'] || '');
-  if (!raw || !svixId || !svixTimestamp || !svixSignature) return false;
-  if (!Number.isFinite(Number(svixTimestamp)) || Math.abs(Date.now()/1000-Number(svixTimestamp))>300) return false;
-  const key = Buffer.from(secret.startsWith('whsec_') ? secret.slice(6) : secret, 'base64');
-  const expected = createHmac('sha256', key).update(`${svixId}.${svixTimestamp}.${raw.toString('utf8')}`).digest('base64');
-  return svixSignature.split(' ').some((part) => {
-    const sig = part.includes(',') ? part.split(',')[1] : part;
-    if (!sig || sig.length !== expected.length) return false;
-    try { return timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); } catch { return false; }
+  const id = String(req.headers[`${headerPrefix}-id`] || '');
+  const timestamp = String(req.headers[`${headerPrefix}-timestamp`] || '');
+  const signature = String(req.headers[`${headerPrefix}-signature`] || '');
+  if (!raw || !id || !timestamp || !signature) return false;
+  if (!Number.isFinite(Number(timestamp)) || Math.abs(Date.now()/1000-Number(timestamp))>300) return false;
+  const content = `${id}.${timestamp}.${raw.toString('utf8')}`;
+  return keys.filter((key) => key.length > 0).some((key) => {
+    const expected = createHmac('sha256', key).update(content).digest('base64');
+    return signature.split(' ').some((part) => {
+      const sig = part.includes(',') ? part.split(',')[1] : part;
+      if (!sig || sig.length !== expected.length) return false;
+      try { return timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); } catch { return false; }
+    });
   });
+}
+
+// Resend keys the HMAC with the base64 portion of its whsec_… secret.
+function verifySvixSignature(req: Request, secret: string): boolean {
+  return verifyStandardWebhook(req, 'svix', [Buffer.from(secret.startsWith('whsec_') ? secret.slice(6) : secret, 'base64')]);
+}
+
+// Magnific's docs key the HMAC with the secret's UTF-8 bytes (their PHP sample
+// base64-decodes it instead), so both are accepted.
+export function verifyMagnificSignature(req: Request, secret: string): boolean {
+  return verifyStandardWebhook(req, 'webhook', [Buffer.from(secret, 'utf8'), Buffer.from(secret, 'base64')]);
 }
 
 // X-Hub-Signature-256 is HMAC-SHA256 of the raw body with the app secret of
@@ -242,6 +257,49 @@ export function registerWebhookRoutes(deps: WebhookDeps): Router {
       }
     } catch (err) {
       logger.error({ err }, 'resend_webhook_error');
+    }
+  });
+
+  // POST /webhooks/magnific — task callbacks. magnificPost attaches this URL as
+  // webhook_url once a signing secret is configured (Admin → Magnific AI, or
+  // MAGNIFIC_WEBHOOK_SECRET). Polling stays the primary path; a callback only
+  // finishes a generation row that is still in flight under the same task_id.
+  router.post('/webhooks/magnific', async (req: Request, res: Response) => {
+    const cfg = await deps.getPlatformConfig('magnific').catch(() => ({} as Record<string, string>));
+    const secret = String(cfg.webhookSecret || process.env.MAGNIFIC_WEBHOOK_SECRET || '').trim();
+    if (!secret) {
+      logger.error('Magnific webhook: no signing secret configured — discarding event. Set it in Admin → Magnific AI or MAGNIFIC_WEBHOOK_SECRET.');
+      return res.status(503).json({ received: false });
+    }
+    if (!verifyMagnificSignature(req, secret)) {
+      logger.warn('Magnific webhook: invalid signature — discarding');
+      return res.status(401).json({ received: false });
+    }
+    res.status(200).json({ received: true });
+    try {
+      const data = req.body?.data ?? req.body ?? {};
+      const taskId = String(data.task_id ?? data.id ?? '').trim();
+      const status = String(data.status ?? '').toUpperCase();
+      if (!taskId || !pool) return;
+      if (status === 'COMPLETED' || status === 'SUCCEEDED' || status === 'DONE') {
+        const url = magnificTaskUrls(data)[0];
+        if (url) {
+          await pool.query(
+            `UPDATE magnific_generations SET status='completed', result_url=$1, error=NULL, completed_at=NOW()
+             WHERE task_id=$2 AND status IN ('pending','processing')`,
+            [url, taskId]
+          );
+        }
+      } else if (status === 'FAILED' || status === 'ERROR') {
+        await pool.query(
+          `UPDATE magnific_generations SET status='failed', error=$1
+           WHERE task_id=$2 AND status IN ('pending','processing')`,
+          [String(data.error ?? data.message ?? 'Generation failed').slice(0, 500), taskId]
+        );
+      }
+      await deps.logIntegrationEvent({ userId: null, integrationSlug: 'magnific', eventType: 'webhook_task_update', status: 'info', response: { task_id: taskId, status } });
+    } catch (err) {
+      logger.error({ err }, 'magnific_webhook_error');
     }
   });
 

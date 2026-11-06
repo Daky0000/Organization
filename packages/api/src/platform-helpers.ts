@@ -15,7 +15,7 @@ function normalizePlatformId(platform: string): string {
   return raw;
 }
 
-function getBackendPublicUrl(req?: Request): string {
+export function getBackendPublicUrl(req?: Request): string {
   const fromEnv = String(
     process.env.BACKEND_PUBLIC_URL ||
     process.env.PUBLIC_API_URL ||

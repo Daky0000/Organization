@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { creditsForUsd } from '../aiPricing.ts';
 import { scanForPromptInjection } from './validationAndPolicyService.ts';
 import type {
   BrandProfileRecord,
@@ -12,40 +13,96 @@ import type {
 } from './types.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Refreshable Provider / Model Capability Registry & Task-Based Router (Sec 7)
+// Model registry: the one list the UI, router, provider adapters, cost
+// estimator, health check and tests all read. Each entry names the exact
+// upstream model ID, how it is called, how it is priced, and when its contract
+// was last checked against the provider's own documentation.
+//
+// An entry is selectable only when it is enabled, not retired or past its
+// shutdown date, has an adapter that can call it, and its API contract has been
+// verified (or an operator has rolled it out explicitly with
+// AUTOPILOT_MODEL_ROLLOUT after verifying it in staging). Nothing is ever
+// substituted silently: an unselectable model is a MODEL_UNAVAILABLE error.
 // ─────────────────────────────────────────────────────────────────────────────
+
+export type ModelTaskType =
+  | 'copy_and_strategy'
+  | 'static_graphic_draft'
+  | 'static_graphic_final'
+  | 'product_typography_image'
+  | 'surface_mockup'
+  | 'photorealistic_campaign'
+  | 'short_video_draft'
+  | 'short_video_final'
+  | 'reference_video_omni'
+  | 'voiceover'
+  | 'upscale_precision'
+  | 'deterministic_compositing';
+
+export type ModelLifecycle = 'active' | 'deprecated' | 'retired' | 'unverified_contract';
+export type ModelAdapterKind = 'openai_images' | 'magnific_image_task' | 'magnific_video_task' | 'deterministic' | 'text_llm' | 'none';
+
+export interface ModelPricingPolicy {
+  /** per_token: priced from provider-reported usage; flat_estimate: no usage reported, cost is always an estimate; none: free; unknown: no published price. */
+  method: 'per_token' | 'flat_estimate' | 'none' | 'unknown';
+  text_input_usd_per_mtok?: number;
+  image_input_usd_per_mtok?: number;
+  image_output_usd_per_mtok?: number;
+  /** Conservative output-token estimate per unit, used only for the reservation. */
+  estimated_output_tokens_per_unit?: number;
+  estimated_input_tokens_per_unit?: number;
+  source?: string;
+}
 
 export interface ModelCapabilityEntry {
   id: string;
   provider: 'magnific' | 'google' | 'openai' | 'anthropic' | 'elevenlabs' | 'deterministic';
+  /** Exact upstream model ID sent to the provider. */
   model: string;
-  task_types: Array<
-    | 'copy_and_strategy'
-    | 'static_graphic_draft'
-    | 'static_graphic_final'
-    | 'product_typography_image'
-    | 'surface_mockup'
-    | 'photorealistic_campaign'
-    | 'short_video_draft'
-    | 'short_video_final'
-    | 'reference_video_omni'
-    | 'voiceover'
-    | 'upscale_precision'
-    | 'deterministic_compositing'
-  >;
+  task_types: ModelTaskType[];
   input_types: Array<'text' | 'image_ref' | 'video_ref' | 'audio' | 'brand_tokens'>;
   output_type: 'text' | 'image' | 'video' | 'audio';
   supported_aspect_ratios: string[];
+  supported_resolutions?: string[];
   max_clip_duration_sec?: number;
   max_references: number;
   supports_exact_text_in_image: boolean;
   latency_tier: 'instant' | 'fast' | 'standard' | 'heavy';
-  provider_cost_usd: number; // Actual estimated third-party provider USD cost (NEVER conflated with SaaS credits!)
-  internal_credits: number;  // Internal SaaS credit consumption
+  sync_mode: 'sync' | 'async_task' | 'local';
+  /** Estimated third-party USD per unit. Never conflated with SaaS credits. */
+  provider_cost_usd: number;
+  /** SaaS credits charged per delivered unit (customer price). */
+  internal_credits: number;
+  pricing: ModelPricingPolicy;
   enabled: boolean;
+  lifecycle: ModelLifecycle;
+  /** ISO date after which the provider no longer serves this model. */
+  shutdown_date?: string;
+  replacement_model_id?: string;
+  adapter: ModelAdapterKind;
+  contract_source: string;
+  /** Date the API contract was checked against the provider's documentation. */
+  contract_verified_at: string | null;
+  /** Date a real staging request succeeded. Null until staging evidence exists. */
+  staging_verified_at: string | null;
   feature_flag?: string;
   fallback_model_id?: string;
 }
+
+const OPENAI_IMAGE_PRICING: ModelPricingPolicy = {
+  method: 'per_token',
+  text_input_usd_per_mtok: 5,
+  image_input_usd_per_mtok: 8,
+  image_output_usd_per_mtok: 30,
+  // Upper estimate for one image at <= 1536px, used only to size the hold; the
+  // settled cost comes from the usage object OpenAI returns with each image.
+  estimated_output_tokens_per_unit: 4200,
+  estimated_input_tokens_per_unit: 600,
+  source: 'https://developers.openai.com/api/docs/models/gpt-image-2.5-flare',
+};
+
+const MAGNIFIC_UNVERIFIED_NOTE =
+  'Not in the public Magnific API reference (docs.magnific.com/llms.txt, checked 2026-10-29). Roll out with AUTOPILOT_MODEL_ROLLOUT only after a staging request succeeds.';
 
 const DEFAULT_MODEL_REGISTRY: ModelCapabilityEntry[] = [
   {
@@ -59,107 +116,68 @@ const DEFAULT_MODEL_REGISTRY: ModelCapabilityEntry[] = [
     max_references: 0,
     supports_exact_text_in_image: false,
     latency_tier: 'fast',
+    sync_mode: 'sync',
     provider_cost_usd: 0.004,
     internal_credits: 2,
-    enabled: true,
-    fallback_model_id: 'anthropic:claude-haiku-4-5',
+    pricing: { method: 'flat_estimate' },
+    // Not called by the autopilot workflow: the brief/copy node is built
+    // deterministically, so this entry is informational and never charged.
+    enabled: false,
+    lifecycle: 'active',
+    adapter: 'none',
+    contract_source: 'Configured through Admin → AI settings (ai-helpers.ts); not invoked by executeAutopilotWorkflow',
+    contract_verified_at: null,
+    staging_verified_at: null,
   },
   {
-    id: 'anthropic:claude-haiku-4-5',
-    provider: 'anthropic',
-    model: 'claude-haiku-4-5',
-    task_types: ['copy_and_strategy'],
-    input_types: ['text', 'brand_tokens'],
-    output_type: 'text',
-    supported_aspect_ratios: [],
+    id: 'openai:gpt-image-2.5-flare',
+    provider: 'openai',
+    model: 'gpt-image-2.5-flare',
+    task_types: ['static_graphic_draft', 'static_graphic_final'],
+    input_types: ['text'],
+    output_type: 'image',
+    supported_aspect_ratios: ['1:1', '4:5', '3:4', '4:3', '16:9', '9:16'],
+    supported_resolutions: ['1024x1024', '1024x1280', '1152x1536', '1536x1152', '1792x1008', '1008x1792'],
     max_references: 0,
     supports_exact_text_in_image: false,
     latency_tier: 'fast',
-    provider_cost_usd: 0.006,
-    internal_credits: 2,
+    sync_mode: 'sync',
+    provider_cost_usd: 0.129,
+    internal_credits: 8,
+    pricing: OPENAI_IMAGE_PRICING,
     enabled: true,
+    lifecycle: 'active',
+    adapter: 'openai_images',
+    contract_source: 'https://developers.openai.com/api/reference/resources/images/methods/generate',
+    contract_verified_at: '2026-10-29',
+    staging_verified_at: null,
   },
   {
-    id: 'magnific:magnific-one-draft',
-    provider: 'magnific',
-    model: 'magnific-one',
-    task_types: ['static_graphic_draft'],
-    input_types: ['text', 'image_ref', 'brand_tokens'],
+    id: 'openai:gpt-image-2.5-sunburst',
+    provider: 'openai',
+    model: 'gpt-image-2.5-sunburst',
+    task_types: ['static_graphic_final', 'product_typography_image', 'photorealistic_campaign'],
+    input_types: ['text'],
     output_type: 'image',
     supported_aspect_ratios: ['1:1', '4:5', '3:4', '4:3', '16:9', '9:16'],
-    max_references: 10,
-    supports_exact_text_in_image: false,
-    latency_tier: 'fast',
-    provider_cost_usd: 0.04,
-    internal_credits: 5,
-    enabled: true,
-    fallback_model_id: 'google:gemini-2.5-flash-image',
-  },
-  {
-    id: 'magnific:magnific-one',
-    provider: 'magnific',
-    model: 'magnific-one',
-    task_types: ['static_graphic_final', 'photorealistic_campaign'],
-    input_types: ['text', 'image_ref', 'brand_tokens'],
-    output_type: 'image',
-    supported_aspect_ratios: ['1:1', '4:5', '3:4', '4:3', '16:9', '9:16'],
-    max_references: 10,
-    supports_exact_text_in_image: false,
-    latency_tier: 'standard',
-    provider_cost_usd: 0.08,
-    internal_credits: 10,
-    enabled: true,
-    fallback_model_id: 'openai:gpt-image-1',
-  },
-  {
-    id: 'magnific:nano-banana-pro',
-    provider: 'magnific',
-    model: 'nano-banana-pro',
-    task_types: ['product_typography_image'],
-    input_types: ['text', 'image_ref'],
-    output_type: 'image',
-    supported_aspect_ratios: ['1:1', '3:4', '4:3', '16:9', '9:16'],
-    max_references: 6,
+    supported_resolutions: ['1024x1024', '1024x1280', '1152x1536', '1536x1152', '1792x1008', '1008x1792'],
+    max_references: 0,
     supports_exact_text_in_image: true,
     latency_tier: 'standard',
-    provider_cost_usd: 0.09,
+    sync_mode: 'sync',
+    provider_cost_usd: 0.129,
     internal_credits: 12,
+    pricing: OPENAI_IMAGE_PRICING,
     enabled: true,
-    fallback_model_id: 'openai:gpt-image-1',
+    lifecycle: 'active',
+    adapter: 'openai_images',
+    contract_source: 'https://developers.openai.com/api/reference/resources/images/methods/generate',
+    contract_verified_at: '2026-10-29',
+    staging_verified_at: null,
   },
   {
-    id: 'magnific:nano-banana-2',
-    provider: 'magnific',
-    model: 'nano-banana-2',
-    task_types: ['surface_mockup'],
-    input_types: ['text', 'image_ref'],
-    output_type: 'image',
-    supported_aspect_ratios: ['1:1', '3:4', '4:3', '16:9', '9:16'],
-    max_references: 6,
-    supports_exact_text_in_image: true,
-    latency_tier: 'standard',
-    provider_cost_usd: 0.09,
-    internal_credits: 12,
-    enabled: true,
-    fallback_model_id: 'magnific:magnific-one',
-  },
-  {
-    id: 'google:gemini-2.5-flash-image',
-    provider: 'google',
-    model: 'gemini-2.5-flash-image',
-    task_types: ['static_graphic_draft', 'static_graphic_final'],
-    input_types: ['text', 'image_ref'],
-    output_type: 'image',
-    supported_aspect_ratios: ['1:1', '3:4', '4:3', '16:9', '9:16'],
-    max_references: 3,
-    supports_exact_text_in_image: false,
-    latency_tier: 'fast',
-    provider_cost_usd: 0.039,
-    internal_credits: 6,
-    enabled: true,
-    fallback_model_id: 'openai:gpt-image-1',
-  },
-  {
+    // Shut down by OpenAI on 2026-10-23. Kept so history and old briefs resolve
+    // to a clear MODEL_UNAVAILABLE instead of an unknown ID.
     id: 'openai:gpt-image-1',
     provider: 'openai',
     model: 'gpt-image-1',
@@ -170,43 +188,112 @@ const DEFAULT_MODEL_REGISTRY: ModelCapabilityEntry[] = [
     max_references: 0,
     supports_exact_text_in_image: true,
     latency_tier: 'standard',
+    sync_mode: 'sync',
     provider_cost_usd: 0.04,
     internal_credits: 8,
-    enabled: true,
+    pricing: OPENAI_IMAGE_PRICING,
+    enabled: false,
+    lifecycle: 'retired',
+    shutdown_date: '2026-10-23',
+    replacement_model_id: 'openai:gpt-image-2.5-sunburst',
+    adapter: 'openai_images',
+    contract_source: 'https://developers.openai.com/api/docs/deprecations',
+    contract_verified_at: '2026-10-29',
+    staging_verified_at: null,
   },
   {
-    id: 'magnific:seedance-2-5-draft',
+    // Announced 2026-06-02, shutdown 2026-12-01. Not selectable for new work.
+    id: 'openai:gpt-image-1-mini',
+    provider: 'openai',
+    model: 'gpt-image-1-mini',
+    task_types: ['static_graphic_draft'],
+    input_types: ['text'],
+    output_type: 'image',
+    supported_aspect_ratios: ['1:1', '16:9', '9:16'],
+    max_references: 0,
+    supports_exact_text_in_image: false,
+    latency_tier: 'fast',
+    sync_mode: 'sync',
+    provider_cost_usd: 0.015,
+    internal_credits: 4,
+    pricing: OPENAI_IMAGE_PRICING,
+    enabled: false,
+    lifecycle: 'deprecated',
+    shutdown_date: '2026-12-01',
+    replacement_model_id: 'openai:gpt-image-2.5-flare',
+    adapter: 'openai_images',
+    contract_source: 'https://developers.openai.com/api/docs/deprecations',
+    contract_verified_at: '2026-10-29',
+    staging_verified_at: null,
+  },
+  {
+    id: 'magnific:magnific-one',
     provider: 'magnific',
-    model: 'seedance-2-5',
-    task_types: ['short_video_draft'],
-    input_types: ['text', 'image_ref', 'video_ref'],
-    output_type: 'video',
-    supported_aspect_ratios: ['9:16', '16:9', '1:1'],
-    max_clip_duration_sec: 15,
-    max_references: 50,
+    model: 'magnific-one',
+    task_types: ['static_graphic_final', 'photorealistic_campaign'],
+    input_types: ['text', 'image_ref', 'brand_tokens'],
+    output_type: 'image',
+    supported_aspect_ratios: ['1:1', '3:4', '4:3', '16:9', '9:16'],
+    supported_resolutions: ['1k', '2k', '4k'],
+    max_references: 10,
     supports_exact_text_in_image: false,
     latency_tier: 'standard',
-    provider_cost_usd: 0.22,
-    internal_credits: 18,
+    sync_mode: 'async_task',
+    provider_cost_usd: 0.6, // 2k high: 600 Magnific credits (Magnific cost simulator, 2 Nov 2026)
+    internal_credits: 10,
+    pricing: { method: 'flat_estimate', source: 'Internal rate card; Magnific task responses report no usage' },
     enabled: true,
-    fallback_model_id: 'magnific:kling-3-0-omni',
+    lifecycle: 'unverified_contract',
+    adapter: 'magnific_image_task',
+    contract_source: MAGNIFIC_UNVERIFIED_NOTE,
+    contract_verified_at: null,
+    staging_verified_at: null,
+  },
+  {
+    id: 'magnific:nano-banana-pro',
+    provider: 'magnific',
+    model: 'nano-banana-pro',
+    task_types: ['product_typography_image', 'surface_mockup'],
+    input_types: ['text', 'image_ref'],
+    output_type: 'image',
+    supported_aspect_ratios: ['1:1', '3:4', '4:3', '16:9', '9:16'],
+    max_references: 6,
+    supports_exact_text_in_image: true,
+    latency_tier: 'standard',
+    sync_mode: 'async_task',
+    provider_cost_usd: 0.075, // 75 Magnific credits (Magnific cost simulator, 2 Nov 2026)
+    internal_credits: 12,
+    pricing: { method: 'flat_estimate', source: 'Internal rate card; Magnific task responses report no usage' },
+    enabled: true,
+    lifecycle: 'unverified_contract',
+    adapter: 'magnific_image_task',
+    contract_source: MAGNIFIC_UNVERIFIED_NOTE,
+    contract_verified_at: null,
+    staging_verified_at: null,
   },
   {
     id: 'magnific:seedance-2-5',
     provider: 'magnific',
     model: 'seedance-2-5',
-    task_types: ['short_video_final'],
+    task_types: ['short_video_draft', 'short_video_final'],
     input_types: ['text', 'image_ref', 'video_ref'],
     output_type: 'video',
     supported_aspect_ratios: ['9:16', '16:9', '1:1'],
+    supported_resolutions: ['480p', '720p', '1080p'],
     max_clip_duration_sec: 30,
-    max_references: 50,
+    max_references: 30,
     supports_exact_text_in_image: false,
     latency_tier: 'heavy',
-    provider_cost_usd: 0.45,
+    sync_mode: 'async_task',
+    provider_cost_usd: 3.95, // 5 s 1080p: 3,950 Magnific credits (Magnific cost simulator, 2 Nov 2026)
     internal_credits: 35,
+    pricing: { method: 'flat_estimate', source: 'Internal rate card; Magnific task responses report no usage' },
     enabled: true,
-    fallback_model_id: 'magnific:kling-3-0-omni',
+    lifecycle: 'unverified_contract',
+    adapter: 'magnific_video_task',
+    contract_source: MAGNIFIC_UNVERIFIED_NOTE,
+    contract_verified_at: null,
+    staging_verified_at: null,
   },
   {
     id: 'magnific:kling-3-0-omni',
@@ -220,39 +307,16 @@ const DEFAULT_MODEL_REGISTRY: ModelCapabilityEntry[] = [
     max_references: 6,
     supports_exact_text_in_image: true,
     latency_tier: 'heavy',
-    provider_cost_usd: 0.48,
+    sync_mode: 'async_task',
+    provider_cost_usd: 0.475, // 5 s 1080p: 475 Magnific credits (Magnific cost simulator, 2 Nov 2026)
     internal_credits: 38,
+    pricing: { method: 'flat_estimate', source: 'Internal rate card; Magnific task responses report no usage' },
     enabled: true,
-  },
-  {
-    id: 'openai:gpt-4o-mini-tts',
-    provider: 'openai',
-    model: 'gpt-4o-mini-tts',
-    task_types: ['voiceover'],
-    input_types: ['text'],
-    output_type: 'audio',
-    supported_aspect_ratios: [],
-    max_references: 0,
-    supports_exact_text_in_image: false,
-    latency_tier: 'fast',
-    provider_cost_usd: 0.015,
-    internal_credits: 3,
-    enabled: true,
-  },
-  {
-    id: 'magnific:upscale-precision',
-    provider: 'magnific',
-    model: 'image-upscaler-precision',
-    task_types: ['upscale_precision'],
-    input_types: ['image_ref'],
-    output_type: 'image',
-    supported_aspect_ratios: ['1:1', '4:5', '9:16', '16:9'],
-    max_references: 1,
-    supports_exact_text_in_image: true,
-    latency_tier: 'fast',
-    provider_cost_usd: 0.03,
-    internal_credits: 4,
-    enabled: true,
+    lifecycle: 'unverified_contract',
+    adapter: 'magnific_video_task',
+    contract_source: MAGNIFIC_UNVERIFIED_NOTE,
+    contract_verified_at: null,
+    staging_verified_at: null,
   },
   {
     id: 'deterministic:compositor-v1',
@@ -265,24 +329,113 @@ const DEFAULT_MODEL_REGISTRY: ModelCapabilityEntry[] = [
     max_references: 10,
     supports_exact_text_in_image: true,
     latency_tier: 'instant',
+    sync_mode: 'local',
     provider_cost_usd: 0,
     internal_credits: 0,
+    pricing: { method: 'none' },
     enabled: true,
+    lifecycle: 'active',
+    adapter: 'deterministic',
+    contract_source: 'deterministicCompositor.ts',
+    contract_verified_at: '2026-10-29',
+    staging_verified_at: null,
   },
 ];
 
-// Runtime refreshable catalog overrides (e.g., admin price/availability updates or feature flags)
+// Runtime overrides (admin price/availability updates). Restricted to fields
+// that cannot resurrect a retired model or change what is sent upstream.
+const OVERRIDABLE_FIELDS = new Set<keyof ModelCapabilityEntry>(['enabled', 'provider_cost_usd', 'internal_credits']);
 let runtimeRegistryOverrides: Record<string, Partial<ModelCapabilityEntry>> = {};
 
 export function refreshModelRegistryOverrides(overrides: Record<string, Partial<ModelCapabilityEntry>>) {
-  runtimeRegistryOverrides = { ...runtimeRegistryOverrides, ...overrides };
+  const known = new Set(DEFAULT_MODEL_REGISTRY.map((m) => m.id));
+  const next = { ...runtimeRegistryOverrides };
+  for (const [id, patch] of Object.entries(overrides ?? {})) {
+    if (!known.has(id) || !patch || typeof patch !== 'object') continue;
+    const clean: Partial<ModelCapabilityEntry> = {};
+    for (const [k, v] of Object.entries(patch)) {
+      if (!OVERRIDABLE_FIELDS.has(k as keyof ModelCapabilityEntry)) continue;
+      if (k === 'enabled' && typeof v === 'boolean') clean.enabled = v;
+      if ((k === 'provider_cost_usd' || k === 'internal_credits') && typeof v === 'number' && Number.isFinite(v) && v >= 0) {
+        (clean as any)[k] = k === 'internal_credits' ? Math.round(v) : v;
+      }
+    }
+    next[id] = { ...(next[id] ?? {}), ...clean };
+  }
+  runtimeRegistryOverrides = next;
 }
 
 export function getModelCapabilityRegistry(): ModelCapabilityEntry[] {
-  return DEFAULT_MODEL_REGISTRY.map((entry) => ({
-    ...entry,
-    ...(runtimeRegistryOverrides[entry.id] ?? {}),
-  }));
+  return DEFAULT_MODEL_REGISTRY.map((entry) => {
+    const override = runtimeRegistryOverrides[entry.id] ?? {};
+    const merged = { ...entry, ...override };
+    // Credits follow the provider cost × 1.54 (server/aiPricing.ts) unless an admin set them explicitly.
+    if (override.internal_credits === undefined && merged.provider_cost_usd > 0) merged.internal_credits = creditsForUsd(merged.provider_cost_usd);
+    return merged;
+  });
+}
+
+function rolledOutModelIds(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  return new Set(String(env.AUTOPILOT_MODEL_ROLLOUT || '').split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+export type ModelUnavailableReason = 'unknown' | 'disabled' | 'retired' | 'past_shutdown' | 'unverified_contract' | 'no_adapter' | 'provider_not_configured';
+
+export function modelSelectability(
+  entry: ModelCapabilityEntry | undefined,
+  opts: { now?: Date; env?: NodeJS.ProcessEnv; availableProviders?: Set<string> } = {},
+): { selectable: true } | { selectable: false; reason: ModelUnavailableReason } {
+  if (!entry) return { selectable: false, reason: 'unknown' };
+  const now = opts.now ?? new Date();
+  if (entry.lifecycle === 'retired') return { selectable: false, reason: 'retired' };
+  if (entry.shutdown_date && now.toISOString().slice(0, 10) >= entry.shutdown_date) return { selectable: false, reason: 'past_shutdown' };
+  if (!entry.enabled) return { selectable: false, reason: 'disabled' };
+  if (entry.adapter === 'none') return { selectable: false, reason: 'no_adapter' };
+  if (entry.lifecycle === 'unverified_contract' && !rolledOutModelIds(opts.env).has(entry.id)) {
+    return { selectable: false, reason: 'unverified_contract' };
+  }
+  if (opts.availableProviders && entry.provider !== 'deterministic' && !opts.availableProviders.has(entry.provider)) {
+    return { selectable: false, reason: 'provider_not_configured' };
+  }
+  return { selectable: true };
+}
+
+export class ModelUnavailableError extends Error {
+  code = 'MODEL_UNAVAILABLE' as const;
+  status = 422;
+  details: Record<string, any>;
+  constructor(message: string, details: Record<string, any>) {
+    super(message);
+    this.name = 'ModelUnavailableError';
+    this.details = details;
+  }
+}
+
+/** Looks up a model by registry ID or exact upstream ID. Never substitutes. */
+export function resolveSelectableModel(
+  idOrUpstream: string,
+  opts: { now?: Date; env?: NodeJS.ProcessEnv; availableProviders?: Set<string> } = {},
+): ModelCapabilityEntry {
+  const registry = getModelCapabilityRegistry();
+  const raw = String(idOrUpstream || '').trim();
+  const entry = registry.find((m) => m.id === raw) ?? registry.find((m) => m.model === raw);
+  const check = modelSelectability(entry, opts);
+  if (!check.selectable) {
+    throw new ModelUnavailableError(
+      entry?.replacement_model_id
+        ? `Model "${raw}" is not available (${check.reason}). Use "${entry.replacement_model_id}" instead.`
+        : `Model "${raw}" is not available (${check.reason}).`,
+      { requested_model: raw, reason: check.reason, replacement_model_id: entry?.replacement_model_id ?? null },
+    );
+  }
+  return entry!;
+}
+
+export function listSelectableModels(opts: { now?: Date; env?: NodeJS.ProcessEnv; availableProviders?: Set<string> } = {}) {
+  return getModelCapabilityRegistry().map((entry) => {
+    const check = modelSelectability(entry, opts);
+    return { ...entry, selectable: check.selectable, unavailable_reason: check.selectable ? null : check.reason };
+  });
 }
 
 export interface RouteTaskInput {
@@ -292,24 +445,39 @@ export interface RouteTaskInput {
   slideCount?: number;
   sceneCount?: number;
   availableProviders?: Set<string>;
+  /** A model the brief asked for explicitly. Validated, never replaced. */
+  requestedModelId?: string | null;
+  now?: Date;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface RoutedModelSelection {
-  primary: ModelCapabilityEntry;
+  /** Null when no selectable model can do this task: callers must refuse with MODEL_UNAVAILABLE. */
+  primary: ModelCapabilityEntry | null;
   compositor: ModelCapabilityEntry;
   copyModel: ModelCapabilityEntry;
   fallback: ModelCapabilityEntry | null;
   rationale: string;
+  unavailable?: { code: 'MODEL_UNAVAILABLE'; message: string; considered: Array<{ id: string; reason: string }> };
+}
+
+function firstSelectable(ids: string[], input: RouteTaskInput) {
+  const registry = getModelCapabilityRegistry();
+  const considered: Array<{ id: string; reason: string }> = [];
+  for (const id of ids) {
+    const entry = registry.find((m) => m.id === id);
+    const check = modelSelectability(entry, { now: input.now, env: input.env, availableProviders: input.availableProviders });
+    if (check.selectable) return { entry: entry!, considered };
+    considered.push({ id, reason: check.reason });
+  }
+  return { entry: null, considered };
 }
 
 export function routeModelForBrief(input: RouteTaskInput): RoutedModelSelection {
-  const registry = getModelCapabilityRegistry().filter((m) => m.enabled);
+  const registry = getModelCapabilityRegistry();
   const byId = new Map(registry.map((m) => [m.id, m]));
-  const isAvailable = (m: ModelCapabilityEntry) =>
-    !input.availableProviders || m.provider === 'deterministic' || input.availableProviders.has(m.provider);
-
   const compositor = byId.get('deterministic:compositor-v1')!;
-  const copyModel = registry.find((m) => m.task_types.includes('copy_and_strategy') && isAvailable(m)) ?? byId.get('google:gemini-2.5-flash')!;
+  const copyModel = byId.get('google:gemini-2.5-flash')!;
 
   // Product demo or real screenshot enhancement: NEVER hallucinate fake UI with generative models!
   if (input.workflowType === 'product_demo' || input.controls.media_source_mode === 'real_screenshot') {
@@ -322,7 +490,6 @@ export function routeModelForBrief(input: RouteTaskInput): RoutedModelSelection 
     };
   }
 
-  // Real photography only
   if (input.controls.media_source_mode === 'real_photography') {
     return {
       primary: compositor,
@@ -333,70 +500,97 @@ export function routeModelForBrief(input: RouteTaskInput): RoutedModelSelection 
     };
   }
 
-  // Short-form video / Reel
-  if (input.workflowType === 'short_form_video') {
-    const desiredId = input.preferDraftCost
-      ? 'magnific:seedance-2-5-draft'
-      : input.controls.reference_fidelity === 'strict'
-        ? 'magnific:kling-3-0-omni'
-        : 'magnific:seedance-2-5';
-    let chosen = byId.get(desiredId) ?? registry.find((m) => m.output_type === 'video' && isAvailable(m)) ?? byId.get('magnific:seedance-2-5-draft')!;
-    if (!isAvailable(chosen) && chosen.fallback_model_id && byId.get(chosen.fallback_model_id)) {
-      chosen = byId.get(chosen.fallback_model_id)!;
+  const isVideo = input.workflowType === 'short_form_video';
+
+  if (input.requestedModelId) {
+    const entry = resolveSelectableModel(input.requestedModelId, {
+      now: input.now,
+      env: input.env,
+      availableProviders: input.availableProviders,
+    });
+    const wanted = isVideo ? 'video' : 'image';
+    if (entry.output_type !== wanted) {
+      throw new ModelUnavailableError(`Model "${entry.id}" produces ${entry.output_type}, not ${wanted}.`, {
+        requested_model: entry.id,
+        reason: 'wrong_media_type',
+      });
     }
-    const fallback = chosen.fallback_model_id ? byId.get(chosen.fallback_model_id) ?? null : null;
     return {
-      primary: chosen,
+      primary: entry,
       compositor,
       copyModel,
-      fallback,
-      rationale: input.preferDraftCost
-        ? `Selected ${chosen.model} in low-cost draft resolution to validate blocking before full render.`
-        : `Selected ${chosen.model} (${chosen.provider}) for reference-consistent multi-shot video with deterministic caption/logo finishing.`,
+      fallback: null,
+      rationale: `Using the model this brief selected: ${entry.model} (${entry.provider}).`,
     };
   }
 
-  // Static graphic or Carousel background generation
-  let desiredImageId = 'magnific:magnific-one';
-  if (input.preferDraftCost) {
-    desiredImageId = 'magnific:magnific-one-draft';
-  } else if (input.controls.text_in_image === 'allowed') {
-    desiredImageId = 'magnific:nano-banana-pro';
+  // Preference order per task. The first selectable entry wins; the choice is
+  // made here, before any budget is reserved, and is reported to the user.
+  const preference = isVideo
+    ? input.controls.reference_fidelity === 'strict'
+      ? ['magnific:kling-3-0-omni', 'magnific:seedance-2-5']
+      : ['magnific:seedance-2-5', 'magnific:kling-3-0-omni']
+    : input.preferDraftCost
+      ? ['openai:gpt-image-2.5-flare', 'magnific:magnific-one']
+      : input.controls.text_in_image === 'allowed'
+        ? ['magnific:nano-banana-pro', 'openai:gpt-image-2.5-sunburst']
+        : ['magnific:magnific-one', 'openai:gpt-image-2.5-sunburst', 'openai:gpt-image-2.5-flare'];
+
+  // Lowest cost first unless the brief asks for best quality: the same order,
+  // re-sorted by what each model costs us (stable, so ties keep their rank).
+  if (input.controls.cost_mode !== 'quality') {
+    const cost = (id: string) => byId.get(id)?.provider_cost_usd ?? Number.POSITIVE_INFINITY;
+    preference.sort((a, b) => cost(a) - cost(b));
   }
 
-  let primary = byId.get(desiredImageId)!;
-  if (!isAvailable(primary)) {
-    const fb = primary.fallback_model_id ? byId.get(primary.fallback_model_id) : null;
-    if (fb && isAvailable(fb)) primary = fb;
+  const picked = firstSelectable(preference, input);
+  if (!picked.entry) {
+    const message = isVideo
+      ? 'No video model is currently available: every candidate is unverified, disabled or its provider is not configured.'
+      : 'No image model is currently available: every candidate is disabled, retired, unverified or its provider is not configured.';
+    return {
+      primary: null,
+      compositor,
+      copyModel,
+      fallback: null,
+      rationale: message,
+      unavailable: { code: 'MODEL_UNAVAILABLE', message, considered: picked.considered },
+    };
   }
-  const fallback = primary.fallback_model_id ? byId.get(primary.fallback_model_id) ?? null : null;
 
+  const skipped = picked.considered.length
+    ? ` Skipped ${picked.considered.map((c) => `${c.id} (${c.reason})`).join(', ')}.`
+    : '';
   return {
-    primary,
+    primary: picked.entry,
     compositor,
     copyModel,
-    fallback,
-    rationale:
-      input.controls.text_in_image === 'avoid'
-        ? `Selected ${primary.model} (${primary.provider}) for text-free visual background + deterministic layer for exact typography and logo lockup.`
-        : `Selected ${primary.model} (${primary.provider}) for micro-typography support + deterministic verification.`,
+    fallback: null,
+    rationale: isVideo
+      ? `Selected ${picked.entry.model} (${picked.entry.provider}) for short-form video with deterministic caption/logo finishing.${skipped}`
+      : input.controls.text_in_image === 'avoid'
+        ? `Selected ${picked.entry.model} (${picked.entry.provider}) for a text-free visual background + deterministic layer for exact typography and logo lockup.${skipped}`
+        : `Selected ${picked.entry.model} (${picked.entry.provider}) for in-image typography + deterministic verification.${skipped}`,
   };
 }
 
 export interface CostEstimateBreakdown {
   selected_provider: string;
   selected_model: string;
+  selected_model_id: string | null;
   units: {
     copy_passes: number;
     visual_generations: number;
     deterministic_renders: number;
   };
-  estimated_provider_cost_usd: number; // Actual third-party provider USD estimate
+  estimated_provider_cost_usd: number; // Third-party provider USD estimate
   estimated_internal_credits: number;  // Separate SaaS internal credits
+  cost_basis: 'estimated';
   requires_spend_confirmation: boolean;
   exceeds_brief_cap: boolean;
   exceeds_monthly_budget: boolean;
   blocking_reason: string | null;
+  blocking_code: 'MODEL_UNAVAILABLE' | 'COST_CAP_BLOCKED' | null;
 }
 
 export function estimateGenerationCost(params: {
@@ -409,29 +603,47 @@ export function estimateGenerationCost(params: {
   aiSceneCount?: number;
   businessCapacity?: BusinessProfileRecord['capacity'];
   availableProviders?: Set<string>;
+  requestedModelId?: string | null;
+  routed?: RoutedModelSelection;
 }): CostEstimateBreakdown {
-  const routed = routeModelForBrief({
+  const routed = params.routed ?? routeModelForBrief({
     workflowType: params.workflowType,
     controls: params.controls,
     preferDraftCost: params.preferDraftCost,
     availableProviders: params.availableProviders,
+    requestedModelId: params.requestedModelId,
   });
+
+  if (!routed.primary) {
+    return {
+      selected_provider: '',
+      selected_model: '',
+      selected_model_id: null,
+      units: { copy_passes: 0, visual_generations: 0, deterministic_renders: 0 },
+      estimated_provider_cost_usd: 0,
+      estimated_internal_credits: 0,
+      cost_basis: 'estimated',
+      requires_spend_confirmation: false,
+      exceeds_brief_cap: false,
+      exceeds_monthly_budget: false,
+      blocking_reason: routed.unavailable?.message ?? 'No model available for this task.',
+      blocking_code: 'MODEL_UNAVAILABLE',
+    };
+  }
 
   const visualUnits =
     routed.primary.provider === 'deterministic'
       ? 0
       : params.workflowType === 'carousel'
-        ? Math.max(1, Math.min(params.slideCount ?? 4, 8))
+        ? Math.max(1, Math.min(params.slideCount ?? 4, 10))
         : params.workflowType === 'short_form_video'
           ? Math.max(1, Math.min(params.aiSceneCount ?? 2, 4))
           : 1;
 
-  const copyPasses = 1;
-  const providerUsd = Number(
-    (copyPasses * routed.copyModel.provider_cost_usd + visualUnits * routed.primary.provider_cost_usd).toFixed(4),
-  );
-  const internalCredits =
-    copyPasses * routed.copyModel.internal_credits + visualUnits * routed.primary.internal_credits;
+  // The brief/copy node is deterministic (no LLM call), so it carries no cost.
+  const copyPasses = 0;
+  const providerUsd = Number((visualUnits * routed.primary.provider_cost_usd).toFixed(4));
+  const internalCredits = visualUnits * routed.primary.internal_credits;
 
   const exceedsBriefUsd = providerUsd > params.spendLimitUsd;
   const exceedsBriefCredits = internalCredits > params.creditCeiling;
@@ -460,6 +672,7 @@ export function estimateGenerationCost(params: {
   return {
     selected_provider: routed.primary.provider,
     selected_model: routed.primary.model,
+    selected_model_id: routed.primary.id,
     units: {
       copy_passes: copyPasses,
       visual_generations: visualUnits,
@@ -467,11 +680,31 @@ export function estimateGenerationCost(params: {
     },
     estimated_provider_cost_usd: providerUsd,
     estimated_internal_credits: internalCredits,
+    cost_basis: 'estimated',
     requires_spend_confirmation: requiresConfirmation,
     exceeds_brief_cap: exceedsBriefUsd || exceedsBriefCredits,
     exceeds_monthly_budget: exceedsMonthlyUsd || exceedsMonthlyCredits,
     blocking_reason: blockingReason,
+    blocking_code: blockingReason ? 'COST_CAP_BLOCKED' : null,
   };
+}
+
+/** USD for one OpenAI image from its reported usage object; null when usage is absent. */
+export function priceFromReportedUsage(
+  pricing: ModelPricingPolicy,
+  usage: { input_tokens_details?: { text_tokens?: number; image_tokens?: number }; input_tokens?: number; output_tokens?: number } | null | undefined,
+): number | null {
+  if (pricing.method !== 'per_token' || !usage || typeof usage.output_tokens !== 'number') return null;
+  const textIn = Number(usage.input_tokens_details?.text_tokens ?? (usage.input_tokens_details ? 0 : usage.input_tokens ?? 0));
+  const imageIn = Number(usage.input_tokens_details?.image_tokens ?? 0);
+  const out = Number(usage.output_tokens);
+  if (![textIn, imageIn, out].every((n) => Number.isFinite(n) && n >= 0)) return null;
+  const usd =
+    (textIn * (pricing.text_input_usd_per_mtok ?? 0) +
+      imageIn * (pricing.image_input_usd_per_mtok ?? 0) +
+      out * (pricing.image_output_usd_per_mtok ?? 0)) /
+    1_000_000;
+  return Number(usd.toFixed(6));
 }
 
 /**
@@ -601,8 +834,10 @@ export function createCreativeBriefForItem(params: {
     ...(params.controlsOverride ?? {}),
   };
 
-  const spendLimitUsd = params.spendLimitUsd ?? Math.min(5.0, Math.max(0.5, business.capacity.monthly_budget_usd));
-  const creditCeiling = params.creditCeiling ?? Math.min(150, Math.max(10, business.capacity.monthly_credit_cap));
+  // Default per-brief cap. Real video costs (e.g. Seedance 2.5: $3.95 per 5 s clip) need room for a multi-clip video.
+  const spendLimitUsd = params.spendLimitUsd ?? Math.min(20.0, Math.max(0.5, business.capacity.monthly_budget_usd));
+  // The credit ceiling matches the spend limit at cost × 1.54, within the monthly credit cap.
+  const creditCeiling = params.creditCeiling ?? Math.min(creditsForUsd(spendLimitUsd), Math.max(10, business.capacity.monthly_credit_cap));
 
   const costEstimate = estimateGenerationCost({
     workflowType: item.workflow_type,

@@ -60,6 +60,8 @@ export default function CreativeQueueTab({ onRefreshOverview, onOpenApprovalQueu
 
   // Spend modal & aspect ratio states
   const [confirmSpendModalOpen, setConfirmSpendModalOpen] = useState(false);
+  /** Every regeneration is priced and confirmed before it runs or charges. */
+  const [regenConfirm, setRegenConfirm] = useState<null | { kind: 'caption' | 'visual' | 'scene'; scene?: number; credits: number; label: string; balance?: number | null }>(null);
   const [aspectRatio, setAspectRatio] = useState<'1:1' | '4:5' | '9:16'>('4:5');
 
   const loadList = useCallback(async () => {
@@ -197,19 +199,51 @@ export default function CreativeQueueTab({ onRefreshOverview, onOpenApprovalQueu
     }
   };
 
+  /** Step 1 of a caption rewrite: get its price and ask. Nothing is written or charged yet. */
   const handleRegenerateCaptionOnly = async () => {
     if (!detail?.item?.id) return;
     setBusy(true);
     setError(null);
     try {
-      const refreshed = await autopilotService.updateItem(detail.item.id, {
-        caption: `${detail.item.title}\n\nKey takeaways:\n• Actionable insight 1\n• Concrete step 2\n• Practical implementation advice.`,
-      });
-      setDetail((prev) => (prev ? { ...prev, item: refreshed.item } : prev));
-      setNote('Regenerated caption copy with structured takeaway formatting.');
+      const quote = await autopilotService.regenerateCaption(detail.item.id, false);
+      setRegenConfirm({ kind: 'caption', credits: Number(quote.credits) || 0, label: quote.label || 'Write a new caption for this post', balance: quote.balance ?? null });
+    } catch (e: any) {
+      setError(e.message || 'Could not price a new caption');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Step 1 of a visual / scene regeneration: refresh the estimate and ask, whatever the amount. */
+  const askRegenerateVisual = async (scene?: number) => {
+    if (!detail?.item?.id) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const est = await autopilotService.estimateItemCost(detail.item.id).catch(() => null);
+      if (est?.estimate) setCostEstimate(est.estimate);
+      const credits = Number(est?.estimate?.estimated_internal_credits ?? costEstimate?.estimated_internal_credits ?? detail.brief?.estimated_credits ?? 0);
+      setRegenConfirm({ kind: scene ? 'scene' : 'visual', scene, credits, label: scene ? `Make scene ${scene} again` : 'Make the visuals again' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Step 2: the user said yes — now it runs and is charged. */
+  const confirmRegenerate = async () => {
+    const r = regenConfirm;
+    setRegenConfirm(null);
+    if (!r || !detail?.item?.id) return;
+    if (r.kind !== 'caption') { void handleExecuteWorkflow(r.scene, true); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      const out = await autopilotService.regenerateCaption(detail.item.id, true);
+      if (out.item) setDetail((prev) => (prev ? { ...prev, item: out.item } : prev));
+      setNote(`New caption written for this post · ${out.credits_used ?? r.credits} credits.`);
       await loadList();
     } catch (e: any) {
-      setError(e.message || 'Failed to regenerate caption');
+      setError(e.message || 'Failed to write a new caption — nothing was charged');
     } finally {
       setBusy(false);
     }
@@ -496,26 +530,29 @@ export default function CreativeQueueTab({ onRefreshOverview, onOpenApprovalQueu
               <Button variant="secondary" size="sm" onClick={handleRegenerateCaptionOnly} disabled={busy}>
                 Regenerate Caption Only
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => void handleExecuteWorkflow()} disabled={busy}>
+              <Button variant="secondary" size="sm" onClick={() => void askRegenerateVisual()} disabled={busy}>
                 Regenerate Visual Layer
               </Button>
               {detail.item.storyboard?.length > 0 && (
-                <Button variant="ghost" size="sm" onClick={() => void handleExecuteWorkflow(1)} disabled={busy}>
+                <Button variant="ghost" size="sm" onClick={() => void askRegenerateVisual(1)} disabled={busy}>
                   Regenerate Scene 1
                 </Button>
               )}
             </div>
 
             {/* Deterministic Raster Preview + Slide / Storyboard Breakdown */}
-            {detail.item.deterministic_overlay?.preview_raster_data_url && (
+            {detail.item.media_assets?.[0]?.url && detail.item.media_assets[0].type === 'image' && (
               <div className="rounded-xl border border-line bg-sunken p-4">
                 <Eyebrow>DETERMINISTIC COMPOSITOR PREVIEW & CONTRAST CHECK</Eyebrow>
                 <div className="mt-3 flex flex-wrap items-start gap-4">
                   <div className={`relative overflow-hidden rounded-[10px] border border-line bg-white ${
                     aspectRatio === '9:16' ? 'aspect-[9/16] w-40' : aspectRatio === '1:1' ? 'aspect-square w-44' : 'aspect-[4/5] w-44'
                   }`}>
+                    {detail.item.media_assets[0].is_demo && (
+                      <div className="absolute left-0 right-0 top-0 z-10 bg-red-600 py-0.5 text-center text-[9px] font-mono font-bold text-white">DEMO — NOT PUBLISHABLE</div>
+                    )}
                     <img
-                      src={detail.item.deterministic_overlay.preview_raster_data_url}
+                      src={detail.item.media_assets[0].url}
                       alt={detail.item.alt_text || detail.item.title}
                       className="h-full w-full object-contain"
                     />
@@ -623,6 +660,34 @@ export default function CreativeQueueTab({ onRefreshOverview, onOpenApprovalQueu
           </div>
         )}
       </Drawer>
+
+      {/* Regeneration confirmation: nothing is made again or charged until the user says yes */}
+      <Modal
+        open={Boolean(regenConfirm)}
+        onClose={() => setRegenConfirm(null)}
+        title={regenConfirm?.label ?? 'Make it again?'}
+        subtitle="This makes it again and uses credits. Nothing runs until you confirm."
+      >
+        <div className="space-y-4 text-xs">
+          <div className="rounded-xl border border-line bg-sunken p-4 space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-muted">Credits:</span>
+              <span className="font-mono text-base font-bold text-ink">{regenConfirm?.credits ?? 0} cr</span>
+            </div>
+            {typeof regenConfirm?.balance === 'number' && (
+              <div className="flex justify-between items-center">
+                <span className="text-muted">Balance after:</span>
+                <span className="font-mono text-ink">{Math.max(0, regenConfirm.balance - regenConfirm.credits)} cr</span>
+              </div>
+            )}
+          </div>
+          <p className="text-muted">The current version is replaced. You're charged only if the new one is made.</p>
+          <div className="flex justify-end gap-2 pt-2 border-t border-line">
+            <Button variant="secondary" size="sm" onClick={() => setRegenConfirm(null)}>Cancel</Button>
+            <Button variant="primary" size="sm" onClick={() => void confirmRegenerate()}>Yes, make it again</Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Model Provider Spend Confirmation Modal */}
       <Modal

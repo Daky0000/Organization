@@ -3,6 +3,7 @@ import type { Request } from '../types/http.ts';
 import axios from 'axios';
 import type { Pool } from 'pg';
 import { logger } from '../logger.ts';
+import { fence } from './aiGuard.ts';
 import { isDeadGrantFlag, markGoogleGrantRevoked, refreshGoogleAccessToken } from '../google-oauth.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -814,10 +815,10 @@ export function registerGmailInboxRoutes(deps: GmailInboxDeps): Router {
     const company = domainToCompany(domain);
 
     const systemPrompt = `You are an AI assistant that summarizes email conversations to help sales and marketing professionals understand their relationship with a contact. Be concise, professional, and highlight key topics, action items, and relationship status. Write 2-4 sentences max.`;
-    const userPrompt = `Summarize the email conversation with ${contactName} from ${company} (${contactEmail}):\n\n${messagesText}`;
+    const userPrompt = `Summarize the email conversation with ${contactName} from ${company} (${contactEmail}):\n\n${fence('email history', messagesText, 12_000)}`;
 
     try {
-      const summary = await deps.callAINonStreaming('google', geminiKey, 'gemini-2.5-flash', systemPrompt, userPrompt, 300);
+      const summary = await deps.callAINonStreaming('google', geminiKey, 'gemini-2.5-flash', systemPrompt, userPrompt, 300, { userId: auth.userId, feature: 'gmail_summary' });
       return res.json({ success: true, summary: summary.trim() });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI summary failed';
@@ -903,10 +904,10 @@ export function registerGmailInboxRoutes(deps: GmailInboxDeps): Router {
     }).join('\n');
 
     const systemPrompt = `You are an AI assistant that summarizes email relationships to help sales and marketing professionals understand their relationship with a company. Be concise, professional, and highlight key topics, themes, and relationship status. Write 3-5 sentences max.`;
-    const userPrompt = `Summarize the email relationship with ${companyName} (${domain}) based on these emails:\n\n${messagesText}`;
+    const userPrompt = `Summarize the email relationship with ${companyName} (${domain}) based on these emails:\n\n${fence('email history', messagesText, 12_000)}`;
 
     try {
-      const summary = await deps.callAINonStreaming('google', geminiKey, 'gemini-2.5-flash', systemPrompt, userPrompt, 400);
+      const summary = await deps.callAINonStreaming('google', geminiKey, 'gemini-2.5-flash', systemPrompt, userPrompt, 400, { userId: auth.userId, feature: 'gmail_company_summary' });
       return res.json({ success: true, summary: summary.trim() });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI summary failed';

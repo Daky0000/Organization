@@ -1,4 +1,7 @@
 import type { Pool } from 'pg';
+import { getDesignSystem, designSystemBlock } from './designSystem.ts';
+import { loadTaste, tasteBlock } from './imageTaste.ts';
+import { listPreferences, onPreferenceChange, preferencesBlock } from './preferenceMemory.ts';
 import { dbQuery } from '../db.ts';
 import { logger } from '../logger.ts';
 
@@ -33,12 +36,22 @@ export function invalidateSharedContext(userId: string): void {
   contextCache.delete(userId);
 }
 
+// A newly learned like/dislike reaches every agent on its next task.
+onPreferenceChange(invalidateSharedContext);
+
 export async function buildSharedAgentContext(userId: string): Promise<string> {
   const cached = contextCache.get(userId);
   if (cached && cached.expires > Date.now()) return cached.context;
 
   const parts: string[] = [];
   const safe = async (fn: () => Promise<void>) => { try { await fn(); } catch { /* section skipped */ } };
+
+  // The user's custom instructions come first: every agent obeys them on every task.
+  await safe(async () => {
+    const { rows } = await dbQuery(`SELECT instructions FROM user_custom_instructions WHERE user_id=$1`, [userId]);
+    const text = String(rows[0]?.instructions || '').trim();
+    if (text) parts.push(`USER'S CUSTOM INSTRUCTIONS (obey on every task; they override defaults, not safety rules):\n${text}`);
+  });
 
   await safe(async () => {
     const { rows } = await dbQuery(
@@ -154,6 +167,26 @@ export async function buildSharedAgentContext(userId: string): Promise<string> {
       [userId]
     );
     if (rows.length) parts.push(`About the user (personalization):\n${rows.map((r: any) => `- [${r.category}] ${r.title}: ${String(r.content).slice(0, 160)}`).join('\n')}`);
+  });
+
+  // The design system captured from the user's website (colours, fonts, voice).
+  await safe(async () => {
+    const ds = await getDesignSystem(dbQuery as any, userId);
+    const block = designSystemBlock(ds);
+    if (block) parts.push(block.replace(/^## /, ''));
+  });
+
+  // What the user taught the image generators: example designs' style, image rules, saved products/people/places.
+  await safe(async () => {
+    const block = tasteBlock(await loadTaste(dbQuery as any, userId));
+    if (block) parts.push(block.replace(/^## /, ''));
+  });
+
+  // What the user likes and doesn't, learned from edits, deletions, reviews and feedback.
+  await safe(async () => {
+    const prefs = await listPreferences(dbQuery as any, userId, 25);
+    const block = preferencesBlock(prefs, 25);
+    if (block) parts.push(block.replace(/^## /, ''));
   });
 
   // Liked-image style profile — the user's visual taste.

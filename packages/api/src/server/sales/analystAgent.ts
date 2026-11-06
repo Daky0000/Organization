@@ -29,6 +29,7 @@ import {
   recordAIUsage,
   resolveActiveKey,
 } from '../../ai-helpers.ts';
+import { nvidiaChat } from '../nvidiaModels.ts';
 import {
   INTENTS,
   LEAD_STAGES,
@@ -317,7 +318,7 @@ export async function runAnalyst(params: {
   const now = params.now ?? new Date();
   const cfg = await getAIConfig();
   const apiKey = resolveActiveKey(cfg);
-  if (!apiKey) throw new Error('No AI provider key configured');
+  if (!apiKey && !cfg.nvidiaReady) throw new Error('No AI provider key configured');
 
   const userMessage = buildAnalystUserMessage({
     transcript: params.transcript,
@@ -326,6 +327,24 @@ export async function runAnalyst(params: {
     channel: params.channel,
   });
 
+  // Free NVIDIA agent ladder first: a rung whose answer does not parse counts
+  // as a failed try. The paid model below runs only when all three failed.
+  if (cfg.nvidiaReady) {
+    try {
+      const r = await nvidiaChat({
+        system: `${ANALYST_SYSTEM_PROMPT}\n\nRespond with a single JSON object and nothing else, matching:\n${JSON.stringify(ANALYST_SCHEMA)}`,
+        user: userMessage, maxTokens: 2000, job: 'agent',
+        accept: (text) => parseAnalystOutput(text) !== null,
+      });
+      await recordAIUsage({ userId: params.userId, feature: 'sales_analyst', provider: 'nvidia', model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens });
+      const record = parseAnalystOutput(r.text);
+      return { record, ops: record ? analystRecordToOps(record, { now, currentStage: params.currentStage }) : [], model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
+    } catch (err) {
+      if (!apiKey) throw err;
+      logger.warn({ err: err instanceof Error ? err.message : err }, 'sales_analyst_free_failed_using_paid');
+    }
+  }
+
   // Gemini has no json_schema output config here, so it goes through the shared
   // non-streaming helper and relies on the parser's brace extraction.
   if (cfg.provider === 'google') {
@@ -333,7 +352,7 @@ export async function runAnalyst(params: {
       'google', apiKey, FAST_MODEL,
       `${ANALYST_SYSTEM_PROMPT}\n\nRespond with a single JSON object matching this shape:\n${JSON.stringify(ANALYST_SCHEMA)}`,
       userMessage, 2000,
-      { userId: params.userId, feature: 'sales_analyst' },
+      { userId: params.userId, feature: 'sales_analyst', skipFree: true },
     );
     const record = parseAnalystOutput(text);
     return {

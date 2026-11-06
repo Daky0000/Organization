@@ -278,7 +278,7 @@ export default function MarketingForms() {
           <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-950">Forms</h1>
           <p className="mt-2 text-base text-slate-500">Capture leads from your website. Submissions land in Contacts and can start automations.</p>
         </div>
-        <button type="button" onClick={() => setEditing('new')} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-700">
+        <button data-tour="forms-create" type="button" onClick={() => setEditing('new')} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-700">
           <Plus size={15} /> New form
         </button>
       </div>
@@ -293,7 +293,7 @@ export default function MarketingForms() {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div data-tour="forms-list" className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {forms.map((form) => (
           <div key={form.id} className="rounded-2xl border border-slate-200 bg-white p-5">
             <div className="flex items-start justify-between gap-2">

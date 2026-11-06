@@ -1,9 +1,11 @@
 import express from 'express';
-import { FAST_MODEL, recordAIUsage, hasAICredits, chargeAICredits } from '../ai-helpers.ts';
+import { creditsForMagnific, economyImageCharge, magnificAudioCost, magnificImageCost, magnificLipSyncCost, magnificVideoCost } from './aiPricing.ts';
+import { assetsIn, loadTaste, tastePromptHint } from './imageTaste.ts';
+import { getMediaMode } from './chatActions.ts';
+import { FAST_MODEL, recordAIUsage, hasAICredits, chargeAICredits, callAINonStreaming, resolveTextKey } from '../ai-helpers.ts';
 import type { Router, Response } from 'express';
 import type { Request } from '../types/http.ts';
 import { randomUUID } from 'crypto';
-import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../logger.ts';
 import { decryptPlatformConfig } from '../integration-helpers.ts';
 import {
@@ -22,6 +24,7 @@ interface AIConfig {
   provider: 'anthropic' | 'google';
   encryptedKey: string | null;
   googleEncryptedKey: string | null;
+  nvidiaReady?: boolean;
 }
 
 interface WorkflowDeps {
@@ -48,7 +51,7 @@ export function buildWorkflowEngine(deps: WorkflowDeps): {
   fireWorkflowTriggers: (userId: string, eventType: string, triggerData: Record<string, any>) => Promise<void>;
   workflowRouter: Router;
 } {
-  const { requireAuth, hasDatabase, dbQuery, enqueueSocialAutomationTask, getAIConfig, resolveActiveKey } = deps;
+  const { requireAuth, hasDatabase, dbQuery, enqueueSocialAutomationTask, getAIConfig } = deps;
   const router = express.Router();
 
   async function executeWorkflowOnce(
@@ -154,50 +157,33 @@ export function buildWorkflowEngine(deps: WorkflowDeps): {
             } else if (postTitle) {
               try {
                 const aiCfg = await getAIConfig();
-                const apiKey = resolveActiveKey(aiCfg);
+                // Free NVIDIA ladder first, then the paid vendor (callAINonStreaming does both).
+                const apiKey = resolveTextKey(aiCfg);
                 let imagePrompt = postTitle;
                 if (apiKey) {
-                  if (aiCfg.provider === 'google') {
-                    const { GoogleGenerativeAI } = await import('@google/generative-ai') as any;
-                    const genai = new GoogleGenerativeAI(apiKey);
-                    const model = genai.getGenerativeModel({ model: 'gemini-2.0-flash' });
-                    const resp = await model.generateContent(
-                      `Write a vivid, creative-director intent prompt for Magnific One for a post titled "${postTitle}".${postExcerpt ? ` Context: ${postExcerpt.slice(0, 200)}` : ''} Keep it under 80 words, no --ar flags.`
-                    );
-                    imagePrompt = resp.response.text().trim() || postTitle;
-                    void recordAIUsage({
-                      userId, feature: 'workflow_ai_image_prompt', provider: 'google', model: 'gemini-2.0-flash',
-                      inputTokens: resp.response.usageMetadata?.promptTokenCount ?? 0,
-                      outputTokens: resp.response.usageMetadata?.candidatesTokenCount ?? 0,
-                    });
-                  } else {
-                    const anthropic = new Anthropic({ apiKey });
-                    const resp = await anthropic.messages.create({
-                      model: FAST_MODEL,
-                      max_tokens: 150,
-                      messages: [{
-                        role: 'user',
-                        content: `Write a vivid, creative-director intent prompt for Magnific One for a post titled "${postTitle}".${postExcerpt ? ` Context: ${postExcerpt.slice(0, 200)}` : ''} Keep it under 80 words, no --ar flags.`,
-                      }],
-                    });
-                    imagePrompt = (resp.content[0] as any)?.text?.trim() || postTitle;
-                    void recordAIUsage({
-                      userId, feature: 'workflow_ai_image_prompt', provider: 'anthropic', model: FAST_MODEL,
-                      inputTokens: resp.usage.input_tokens, outputTokens: resp.usage.output_tokens,
-                    });
-                  }
+                  imagePrompt = (await callAINonStreaming(
+                    aiCfg.provider, apiKey, aiCfg.provider === 'google' ? 'gemini-2.0-flash' : FAST_MODEL,
+                    'You are a creative director writing image-generation prompts.',
+                    `Write a vivid, creative-director intent prompt for Magnific One for a post titled "${postTitle}".${postExcerpt ? ` Context: ${postExcerpt.slice(0, 200)}` : ''} Keep it under 80 words, no --ar flags.`,
+                    150,
+                    { userId, feature: 'workflow_ai_image_prompt', nvidiaJob: 'text', skipCache: true },
+                  )).trim() || postTitle;
                 }
                 // Resolve Magnific API key and render via Magnific One / Magnific Image
                 const { rows: magCfg } = await dbQuery(`SELECT config FROM platform_configs WHERE platform = 'magnific' LIMIT 1`).catch(() => ({ rows: [] as any[] }));
                 const magnificKey = decryptPlatformConfig(magCfg[0]?.config)?.apiKey || process.env.MAGNIFIC_API_KEY || process.env.FREEPIK_API_KEY || '';
                 if (magnificKey && imagePrompt) {
-                  const magModel = String(cfg.model || 'magnific-one');
-                  const genRes = await magnificGenerateImage(magModel, imagePrompt, String(cfg.aspect_ratio || '16:9'), magnificKey, undefined, {
-                    mode: cfg.mode || 'quality',
-                    resolution: cfg.resolution || '2k',
-                    tiles: cfg.tiles,
-                    reference_images: cfg.reference_images,
-                  });
+                  // A model chosen on the node wins; otherwise the user's media setting (lowest cost by default).
+                  const magModel = String(cfg.model || ((await getMediaMode(dbQuery, userId)) === 'quality' ? 'magnific-one' : 'z-image'));
+                  // Magnific One options only for Magnific One: any `mode` routes the call to Magnific One.
+                  // What the user taught the image generators: learned style + bans in the prompt; examples as references for Magnific One.
+                  const taste = await loadTaste(dbQuery as any, userId).catch(() => null);
+                  const exampleRefs = taste ? taste.examples.slice(0, 3).map((e) => e.url) : [];
+                  const imgOpts = magModel === 'magnific-one'
+                    ? { mode: cfg.mode || 'quality', quality: cfg.quality || 'medium', resolution: cfg.resolution || '2k', tiles: cfg.tiles, reference_images: cfg.reference_images ?? (exampleRefs.length ? exampleRefs : undefined) }
+                    : { resolution: cfg.resolution, reference_images: cfg.reference_images };
+                  const tastedPrompt = [imagePrompt, taste ? tastePromptHint(taste, assetsIn(imagePrompt, taste.assets)) : ''].filter(Boolean).join(' ');
+                  const genRes = await magnificGenerateImage(magModel, tastedPrompt, String(cfg.aspect_ratio || '16:9'), magnificKey, undefined, imgOpts);
                   if (genRes.url && !genRes.error) {
                     triggerData.featured_image = genRes.url;
                     triggerData.image_url = genRes.url;
@@ -205,7 +191,7 @@ export function buildWorkflowEngine(deps: WorkflowDeps): {
                     if (postId) {
                       await dbQuery(`UPDATE blog_posts SET featured_image = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3`, [genRes.url, postId, userId]).catch(() => undefined);
                     }
-                    await chargeAICredits(userId, 6, 'workflow_magnific_image', { model: magModel });
+                    await chargeAICredits(userId, (cfg.model ? creditsForMagnific(magnificImageCost(magModel, imgOpts as any)) : magModel === 'magnific-one' ? creditsForMagnific(magnificImageCost(magModel, imgOpts as any)) : economyImageCharge(creditsForMagnific(magnificImageCost(magModel, imgOpts as any)))), 'workflow_magnific_image', { model: magModel });
                     addLog(node.id, `Generated Magnific (${magModel}) image: ${genRes.url}`);
                   } else {
                     addLog(node.id, `Magnific image fallback to prompt notification (${genRes.error || 'no url'})`);
@@ -242,7 +228,7 @@ export function buildWorkflowEngine(deps: WorkflowDeps): {
               );
               if (vidRes.url) {
                 triggerData.video_url = vidRes.url;
-                await chargeAICredits(userId, 25, 'workflow_magnific_video', { model: vidRes.model });
+                await chargeAICredits(userId, creditsForMagnific(magnificVideoCost(String(vidRes.model), { duration: cfg.duration || 5, resolution: cfg.resolution, generate_audio: cfg.generate_audio })), 'workflow_magnific_video', { model: vidRes.model });
                 addLog(node.id, `Generated Magnific video (${vidRes.model}): ${vidRes.url}`);
               } else {
                 addLog(node.id, `generate_ai_video error: ${vidRes.error}`);
@@ -260,7 +246,7 @@ export function buildWorkflowEngine(deps: WorkflowDeps): {
               const lipRes = await magnificLipSync({ image_url: imgUrl, audio_url: audUrl, prompt: cfg.prompt, resolution: cfg.resolution || '1080p' }, magnificKey);
               if (lipRes.url) {
                 triggerData.video_url = lipRes.url;
-                await chargeAICredits(userId, 30, 'workflow_magnific_lipsync', {});
+                await chargeAICredits(userId, creditsForMagnific(magnificLipSyncCost()), 'workflow_magnific_lipsync', {});
                 addLog(node.id, `Generated OmniHuman 1.5 lip-sync video: ${lipRes.url}`);
               } else {
                 addLog(node.id, `generate_ai_lipsync error: ${lipRes.error}`);
@@ -287,7 +273,7 @@ export function buildWorkflowEngine(deps: WorkflowDeps): {
               );
               if (audRes.url) {
                 triggerData.audio_url = audRes.url;
-                await chargeAICredits(userId, 5, 'workflow_magnific_audio', { type: audRes.type });
+                await chargeAICredits(userId, creditsForMagnific(magnificAudioCost(String(audRes.type), cfg.duration_seconds)), 'workflow_magnific_audio', { type: audRes.type });
                 addLog(node.id, `Generated Magnific audio (${audRes.type}): ${audRes.url}`);
               } else {
                 addLog(node.id, `generate_ai_audio error: ${audRes.error}`);

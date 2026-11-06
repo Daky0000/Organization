@@ -10,6 +10,7 @@ import {
   chargeAICredits,
   creditsForCostUsd,
   hasAICredits,
+  freeFirst,
 } from '../../ai-helpers.ts';
 import { AGENT_DEFS } from '../../agent-helpers.ts';
 import { invalidateSharedContext } from '../agentSharedContext.ts';
@@ -317,17 +318,21 @@ export async function getLatestResearch(userId: string): Promise<ResearchRow | n
   return rows[0] ?? null;
 }
 
+// apiKey is '' when only the free NVIDIA models are configured.
 type TeamAI = { provider: 'anthropic' | 'google'; apiKey: string };
 
 async function resolveTeamAI(): Promise<TeamAI | null> {
+  let nvidiaReady = false;
   try {
     const cfg = await getAIConfig();
+    nvidiaReady = cfg.nvidiaReady;
     const apiKey = resolveActiveKey(cfg);
     if (apiKey) return { provider: cfg.provider === 'google' ? 'google' : 'anthropic', apiKey };
   } catch { /* fall through */ }
   if (process.env.ANTHROPIC_API_KEY) return { provider: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY };
   const google = process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY;
-  return google ? { provider: 'google', apiKey: google } : null;
+  if (google) return { provider: 'google', apiKey: google };
+  return nvidiaReady ? { provider: 'anthropic', apiKey: '' } : null;
 }
 
 type ModelReply = { text: string; sources: Array<{ title: string; url: string }>; searched: boolean };
@@ -425,8 +430,11 @@ async function callGemini(
   return { text, sources, searched: args.webSearch && sources.length > 0 };
 }
 
-// Asks the configured model, with web search when wanted; when search is not
-// available on the account, asks again without it.
+// Without web search: the free NVIDIA agent ladder first (three models, one
+// try each), the configured paid model only when all three failed.
+// With web search: the free models cannot search, so the paid model searches
+// when there is one; without it (or when search fails) the answer comes from
+// model knowledge, free first, and is reported as unsearched.
 async function askModel(
   ai: TeamAI,
   args: { system: string; user: string; maxTokens: number; webSearch: boolean; userId: string; feature: string },
@@ -434,12 +442,20 @@ async function askModel(
   const call = (webSearch: boolean) => (ai.provider === 'google'
     ? callGemini(ai.apiKey, { ...args, webSearch })
     : callClaude(ai.apiKey, { ...args, webSearch }));
-  if (!args.webSearch) return call(false);
+  const withoutSearch = async (): Promise<ModelReply> => {
+    let paidReply: ModelReply | null = null;
+    const text = await freeFirst(
+      { system: args.system, user: args.user, maxTokens: args.maxTokens, job: 'agent', userId: args.userId, feature: args.feature },
+      ai.apiKey ? async () => { paidReply = await call(false); return paidReply.text; } : null,
+    );
+    return paidReply ?? { text, sources: [], searched: false };
+  };
+  if (!args.webSearch || !ai.apiKey) return withoutSearch();
   try {
     return await call(true);
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : String(err), userId: args.userId }, 'agent_web_search_unavailable');
-    return call(false);
+    return withoutSearch();
   }
 }
 

@@ -1,11 +1,12 @@
 import express from 'express';
+import { captureDesignSystem } from './designSystem.ts';
 import type { Router, Response } from 'express';
 import type { Request } from '../types/http.ts';
 import axios from 'axios';
 import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../logger.ts';
 import { decryptPlatformConfig } from '../integration-helpers.ts';
-import { FAST_MODEL } from '../ai-helpers.ts';
+import { FAST_MODEL, freeFirst } from '../ai-helpers.ts';
 import { invalidateSharedContext } from './agentSharedContext.ts';
 
 type AuthResult = { userId: string; role?: string } | null;
@@ -16,6 +17,7 @@ interface AIConfig {
   encryptedKey: string | null;
   googleEncryptedKey: string | null;
   systemPrompt: string | null;
+  nvidiaReady?: boolean;
 }
 
 interface MemoryAgentDeps {
@@ -238,9 +240,9 @@ export function registerMemoryAgentRoutes({
     const { brandName, industry, offerings, audience, voiceTones = [], goals = [] } = req.body as Record<string, any>;
     if (!brandName?.trim()) return res.status(400).json({ success: false, error: 'brandName is required' });
 
-    const { encryptedKey } = await getAIConfig();
+    const { encryptedKey, nvidiaReady } = await getAIConfig();
     const apiKey = (encryptedKey ? decryptAIKey(encryptedKey) : null) || process.env.ANTHROPIC_API_KEY || '';
-    if (!apiKey) return res.status(503).json({ success: false, error: 'AI not configured — add Anthropic API key in Admin → AI Assistant' });
+    if (!apiKey && !nvidiaReady) return res.status(503).json({ success: false, error: 'The AI assistant is temporarily unavailable. Please try again in a few minutes.' });
 
     const prompt = `You are a brand strategist AI. Generate a structured memory profile for a brand based on the following info.
 
@@ -259,14 +261,14 @@ Output ONLY a valid JSON array of memory objects. Each object must have exactly 
 Generate 20-35 diverse, specific memories covering all categories. No markdown, no explanation — pure JSON array only.`;
 
     try {
-      const client = new Anthropic({ apiKey });
-      const msg = await client.messages.create({
-        model: FAST_MODEL,
-        max_tokens: 4096,
-        messages: [{ role: 'user', content: prompt }],
-      });
-
-      const text = msg.content.find((b) => b.type === 'text')?.text ?? '';
+      // Free NVIDIA ladder first, Claude only when all three failed.
+      const text = await freeFirst(
+        { system: 'You are a brand strategist AI. Reply with a JSON array only.', user: prompt, maxTokens: 4096, job: 'text', userId: auth.userId, feature: 'memory_generate' },
+        apiKey ? async () => {
+          const msg = await new Anthropic({ apiKey }).messages.create({ model: FAST_MODEL, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] });
+          return msg.content.find((b) => b.type === 'text')?.text ?? '';
+        } : null,
+      );
       const jsonMatch = text.match(/\[[\s\S]*\]/);
       if (!jsonMatch) throw new Error('AI did not return valid JSON');
 
@@ -312,6 +314,9 @@ Generate 20-35 diverse, specific memories covering all categories. No markdown, 
     ].filter((j): j is ScrapeJob => Boolean(j.url.trim()));
 
     if (jobs.length === 0) return res.status(400).json({ error: 'Please provide at least one URL to scrape' });
+
+    // The website's design system is captured alongside its content (colours, fonts, logo, voice).
+    if (website?.trim()) void captureDesignSystem((sql, p) => dbQuery(sql, p as any[]), auth.userId, website.trim());
 
     const apiToken = await getApifyToken();
     if (!apiToken) return res.status(503).json({ error: 'Apify not configured — ask your admin to add the API key in Admin → Integrations → Apify' });
@@ -379,17 +384,11 @@ Generate 20-35 diverse, specific memories covering all categories. No markdown, 
     );
     let memoriesCreated = 1;
 
-    const { encryptedKey } = await getAIConfig();
+    const { encryptedKey, nvidiaReady } = await getAIConfig();
     const aiKey = (encryptedKey ? decryptAIKey(encryptedKey) : null) || process.env.ANTHROPIC_API_KEY || '';
-    if (aiKey) {
+    if (aiKey || nvidiaReady) {
       try {
-        const client = new Anthropic({ apiKey: aiKey });
-        const resp = await client.messages.create({
-          model: FAST_MODEL,
-          max_tokens: 2500,
-          messages: [{
-            role: 'user',
-            content: `Analyse this scraped brand data and extract structured memory fields as a JSON array.
+        const extractPrompt = `Analyse this scraped brand data and extract structured memory fields as a JSON array.
 
 SCRAPED DATA:
 ${fullRaw.slice(0, 6000)}
@@ -402,10 +401,15 @@ Return ONLY a valid JSON array, no markdown fences:
 
 Valid categories: brand, business, audience, content, social, website, custom
 
-Extract 8–15 fields covering: brand name, tagline/description, mission, products/services, target audience, brand voice/tone, social media handles, website purpose, key messages, contact details, unique value proposition, competitors, pricing (if visible). Only include fields that have real data from the scraped content. Skip anything empty or irrelevant.`,
-          }],
-        });
-        const raw = resp.content[0]?.type === 'text' ? resp.content[0].text : '';
+Extract 8–15 fields covering: brand name, tagline/description, mission, products/services, target audience, brand voice/tone, social media handles, website purpose, key messages, contact details, unique value proposition, competitors, pricing (if visible). Only include fields that have real data from the scraped content. Skip anything empty or irrelevant.`;
+        // Free NVIDIA ladder first, Claude only when all three failed.
+        const raw = await freeFirst(
+          { system: 'You extract brand facts. Reply with a JSON array only.', user: extractPrompt, maxTokens: 2500, job: 'fast', userId: auth.userId, feature: 'memory_scrape_extract' },
+          aiKey ? async () => {
+            const resp = await new Anthropic({ apiKey: aiKey }).messages.create({ model: FAST_MODEL, max_tokens: 2500, messages: [{ role: 'user', content: extractPrompt }] });
+            return resp.content[0]?.type === 'text' ? resp.content[0].text : '';
+          } : null,
+        );
         const match = raw.match(/\[[\s\S]*\]/);
         if (match) {
           const fields = JSON.parse(match[0]) as { category?: string; title?: string; content?: string }[];

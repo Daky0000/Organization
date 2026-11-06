@@ -753,7 +753,7 @@ function SurveyList({ onSelect, onNew, onAnalytics }: {
           <h1 className="text-xl font-semibold text-gray-900">Surveys</h1>
           <p className="text-sm text-gray-500 mt-0.5">Collect feedback from your audience with shareable surveys.</p>
         </div>
-        <button onClick={onNew} className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
+        <button data-tour="surveys-new" onClick={onNew} className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
           <Plus size={15} /> New Survey
         </button>
       </div>
@@ -766,7 +766,7 @@ function SurveyList({ onSelect, onNew, onAnalytics }: {
           <button onClick={onNew} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Create survey</button>
         </div>
       ) : (
-        <div className="grid gap-4">
+        <div data-tour="surveys-list" className="grid gap-4">
           {surveys.map(s => (
             <div key={s.id} className="bg-white border border-gray-200 rounded-xl p-5 hover:shadow-sm transition-shadow">
               <div className="flex items-start justify-between gap-4">

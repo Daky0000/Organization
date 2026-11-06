@@ -145,6 +145,13 @@ export const autopilotService = {
       body: JSON.stringify(payload),
     }),
 
+  /** Without confirm: the price only (nothing runs). With confirm: a new AI caption, charged. */
+  regenerateCaption: (itemId: string, confirm = false) =>
+    requestJson<{ success: true; needs_confirmation?: boolean; credits?: number; label?: string; balance?: number | null; item?: any; credits_used?: number }>(`/autopilot/items/${encodeURIComponent(itemId)}/regenerate-caption`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm }),
+    }),
+
   listModels: () => requestJson<{ success: true; models: any[] }>('/autopilot/models'),
   updateBrief: (itemId: string, payload: Record<string, any>) =>
     requestJson<{ success: true; brief: any; cost_estimate: any }>(`/autopilot/items/${encodeURIComponent(itemId)}/brief`, {

@@ -54,6 +54,24 @@ export default function AdminMagnific() {
   const [testError, setTestError]   = useState('');
   const [testRaw, setTestRaw]       = useState<string>('');
   const [saveMsg, setSaveMsg]       = useState('');
+  const [keySource, setKeySource]   = useState<'admin' | 'env' | null>(null);
+
+  // Webhook signing secret
+  const [whSecret, setWhSecret]             = useState('');
+  const [whMasked, setWhMasked]             = useState('');
+  const [whHasSecret, setWhHasSecret]       = useState(false);
+  const [whSource, setWhSource]             = useState<'admin' | 'env' | null>(null);
+  const [whUrl, setWhUrl]                   = useState('');
+  const [whSaving, setWhSaving]             = useState(false);
+  const [whSaveMsg, setWhSaveMsg]           = useState('');
+
+  // Freepik key (separate account; falls back to the Magnific key when empty)
+  const [fpKey, setFpKey]               = useState('');
+  const [fpMaskedKey, setFpMaskedKey]   = useState('');
+  const [fpHasKey, setFpHasKey]         = useState(false);
+  const [fpSource, setFpSource]         = useState<'db' | 'env' | null>(null);
+  const [fpSaving, setFpSaving]         = useState(false);
+  const [fpSaveMsg, setFpSaveMsg]       = useState('');
 
   // Replicate state
   const [rpKey, setRpKey]               = useState('');
@@ -74,6 +92,7 @@ export default function AdminMagnific() {
   useEffect(() => {
     fetchConfig();
     fetchReplicateConfig();
+    fetchFreepikConfig();
     fetchGenerations();
   }, []);
 
@@ -81,8 +100,46 @@ export default function AdminMagnific() {
     try {
       const r = await fetch(`${getApiBaseUrl()}/api/admin/magnific/config`, { headers });
       const d = await r.json();
-      if (d.success) { setHasKey(d.hasKey); setMaskedKey(d.maskedKey ?? ''); }
+      if (d.success) {
+        setHasKey(d.hasKey); setMaskedKey(d.maskedKey ?? ''); setKeySource(d.keySource ?? null);
+        setWhHasSecret(!!d.hasWebhookSecret); setWhMasked(d.maskedWebhookSecret ?? '');
+        setWhSource(d.webhookSecretSource ?? null); setWhUrl(d.webhookUrl ?? '');
+      }
     } catch { /* ignore */ }
+  }
+
+  async function saveWebhookSecret() {
+    if (!whSecret.trim()) return;
+    setWhSaving(true); setWhSaveMsg('');
+    try {
+      const r = await fetch(`${getApiBaseUrl()}/api/admin/magnific/config`, {
+        method: 'PUT', headers, body: JSON.stringify({ webhookSecret: whSecret.trim() }),
+      });
+      const d = await r.json();
+      if (d.success) { setWhSaveMsg('Saved!'); setWhSecret(''); fetchConfig(); }
+      else setWhSaveMsg(d.error ?? 'Save failed');
+    } catch (e: any) { setWhSaveMsg(e.message); } finally { setWhSaving(false); }
+  }
+
+  async function fetchFreepikConfig() {
+    try {
+      const r = await fetch(`${getApiBaseUrl()}/api/admin/freepik/config`, { headers });
+      const d = await r.json();
+      if (d.success) { setFpHasKey(d.hasKey); setFpMaskedKey(d.maskedKey ?? ''); setFpSource(d.hasKey ? d.source ?? null : null); }
+    } catch { /* ignore */ }
+  }
+
+  async function saveFreepikKey() {
+    if (!fpKey.trim()) return;
+    setFpSaving(true); setFpSaveMsg('');
+    try {
+      const r = await fetch(`${getApiBaseUrl()}/api/admin/freepik/config`, {
+        method: 'PUT', headers, body: JSON.stringify({ apiKey: fpKey.trim() }),
+      });
+      const d = await r.json();
+      if (d.success) { setFpSaveMsg('Saved!'); setFpKey(''); fetchFreepikConfig(); }
+      else setFpSaveMsg(d.error ?? 'Save failed');
+    } catch (e: any) { setFpSaveMsg(e.message); } finally { setFpSaving(false); }
   }
 
   async function saveKey() {
@@ -212,7 +269,7 @@ export default function AdminMagnific() {
         {hasKey && (
           <div className="flex items-center gap-2 mb-4 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
             <CheckCircle2 size={14} className="text-green-500 shrink-0" />
-            <span className="text-xs text-slate-600">Current key: <span className="font-mono font-semibold">{maskedKey}</span></span>
+            <span className="text-xs text-slate-600">Current key: <span className="font-mono font-semibold">{maskedKey}</span>{keySource === 'env' && ' (from MAGNIFIC_API_KEY — saving here replaces it)'}</span>
           </div>
         )}
 
@@ -247,6 +304,72 @@ export default function AdminMagnific() {
             <pre className="mt-1 text-[10px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap">{testRaw}</pre>
           </details>
         )}
+
+        {/* Webhook signing secret */}
+        <div className="mt-6 border-t border-slate-100 pt-5">
+          <h3 className="text-sm font-bold text-slate-900">Webhook Signing Secret</h3>
+          <p className="text-xs text-slate-500 mb-3">
+            Issued next to the API key at magnific.com → API keys. Once set, every task is started with the callback URL below and each callback is signature-checked; without it callbacks are refused.
+          </p>
+          {whUrl && (
+            <p className="text-xs text-slate-600 mb-3">Callback URL: <span className="font-mono font-semibold break-all">{whUrl}</span></p>
+          )}
+          {whHasSecret && (
+            <div className="flex items-center gap-2 mb-3 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
+              <CheckCircle2 size={14} className="text-green-500 shrink-0" />
+              <span className="text-xs text-slate-600">Current secret: <span className="font-mono font-semibold">{whMasked}</span>{whSource === 'env' && ' (from MAGNIFIC_WEBHOOK_SECRET — saving here replaces it)'}</span>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={whSecret}
+              onChange={e => setWhSecret(e.target.value)}
+              placeholder={whHasSecret ? 'Enter new secret to replace…' : 'Enter webhook secret…'}
+              className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder-slate-400 outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB]/20"
+            />
+            <button type="button" disabled={!whSecret.trim() || whSaving} onClick={saveWebhookSecret}
+              className="flex items-center gap-1.5 rounded-xl bg-[#2563EB] px-4 py-2 text-sm font-semibold text-white hover:bg-[#4a5ae0] disabled:opacity-40 disabled:cursor-not-allowed transition">
+              {whSaving ? <Loader2 size={14} className="animate-spin" /> : null}
+              Save
+            </button>
+          </div>
+          {whSaveMsg && <p className={`text-xs mt-2 ${whSaveMsg === 'Saved!' ? 'text-green-600' : 'text-red-500'}`}>{whSaveMsg}</p>}
+        </div>
+      </div>
+
+      {/* Freepik API Key */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#2563EB]/10">
+            <Key size={18} className="text-[#2563EB]" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-slate-900">Freepik API Key (Optional)</h2>
+            <p className="text-xs text-slate-500">Used for Freepik Mystic. When empty, the Magnific key above is used.</p>
+          </div>
+        </div>
+        {fpHasKey && (
+          <div className="flex items-center gap-2 mb-4 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
+            <CheckCircle2 size={14} className="text-green-500 shrink-0" />
+            <span className="text-xs text-slate-600">Current key: <span className="font-mono font-semibold">{fpMaskedKey}</span>{fpSource === 'env' && ' (from FREEPIK_API_KEY — saving here replaces it)'}</span>
+          </div>
+        )}
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={fpKey}
+            onChange={e => setFpKey(e.target.value)}
+            placeholder={fpHasKey ? 'Enter new API key to replace…' : 'Enter Freepik API key…'}
+            className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder-slate-400 outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB]/20"
+          />
+          <button type="button" disabled={!fpKey.trim() || fpSaving} onClick={saveFreepikKey}
+            className="flex items-center gap-1.5 rounded-xl bg-[#2563EB] px-4 py-2 text-sm font-semibold text-white hover:bg-[#4a5ae0] disabled:opacity-40 disabled:cursor-not-allowed transition">
+            {fpSaving ? <Loader2 size={14} className="animate-spin" /> : null}
+            Save
+          </button>
+        </div>
+        {fpSaveMsg && <p className={`text-xs mt-2 ${fpSaveMsg === 'Saved!' ? 'text-green-600' : 'text-red-500'}`}>{fpSaveMsg}</p>}
       </div>
 
       {/* Supported Models */}

@@ -12,6 +12,7 @@ import type {
   PublicationRecord,
   WorkflowRunRecord,
 } from './types.ts';
+import type { AutopilotAssetRecord } from './assetPipeline.ts';
 
 export interface AutopilotRepoDeps {
   pool: Pick<Pool, 'query'>;
@@ -36,6 +37,7 @@ interface InMemoryAutopilotState {
   experiments: Map<string, Record<string, any>>;
   recommendations: Map<string, Record<string, any>>;
   auditEvents: Array<Record<string, any>>;
+  assets: Map<string, AutopilotAssetRecord>;
 }
 
 export function createAutopilotRepository({ pool, hasDatabase }: AutopilotRepoDeps) {
@@ -57,6 +59,7 @@ export function createAutopilotRepository({ pool, hasDatabase }: AutopilotRepoDe
     experiments: new Map(),
     recommendations: new Map(),
     auditEvents: [],
+    assets: new Map(),
   };
 
   const usePg = () => hasDatabase();
@@ -903,26 +906,228 @@ export function createAutopilotRepository({ pool, hasDatabase }: AutopilotRepoDe
         `INSERT INTO autopilot_publications (
            id, tenant_id, content_item_id, channel, social_account_id, platform_media_type,
            slot_name, timezone, scheduled_at, status, remote_post_id, error_message, retryable,
-           published_at, created_at, updated_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+           published_at, created_at, updated_at, paused, reconcile_required, acting_user_id,
+           publish_idempotency_key, attempt_count, next_attempt_at, provider_container_id, permalink,
+           error_code, submitted_at, processing_started_at, provider_response
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28::jsonb)
          ON CONFLICT (id) DO UPDATE SET
            scheduled_at = EXCLUDED.scheduled_at,
+           timezone = EXCLUDED.timezone,
            status = EXCLUDED.status,
            remote_post_id = EXCLUDED.remote_post_id,
            error_message = EXCLUDED.error_message,
            retryable = EXCLUDED.retryable,
            published_at = EXCLUDED.published_at,
-           updated_at = EXCLUDED.updated_at`,
+           updated_at = EXCLUDED.updated_at,
+           paused = EXCLUDED.paused,
+           reconcile_required = EXCLUDED.reconcile_required,
+           attempt_count = EXCLUDED.attempt_count,
+           next_attempt_at = EXCLUDED.next_attempt_at,
+           provider_container_id = EXCLUDED.provider_container_id,
+           permalink = EXCLUDED.permalink,
+           error_code = EXCLUDED.error_code,
+           submitted_at = EXCLUDED.submitted_at,
+           processing_started_at = EXCLUDED.processing_started_at,
+           provider_response = EXCLUDED.provider_response,
+           version = autopilot_publications.version + 1`,
         [
           pub.id, pub.tenant_id, pub.content_item_id, pub.channel, pub.social_account_id,
           pub.platform_media_type, pub.slot_name, pub.timezone, pub.scheduled_at, pub.status,
           pub.remote_post_id, pub.error_message, pub.retryable, pub.published_at, pub.created_at, pub.updated_at,
+          Boolean(pub.paused), Boolean(pub.reconcile_required), pub.acting_user_id ?? null,
+          pub.publish_idempotency_key ?? null, pub.attempt_count ?? 0, pub.next_attempt_at ?? null,
+          pub.provider_container_id ?? null, pub.permalink ?? null, pub.error_code ?? null,
+          pub.submitted_at ?? null, pub.processing_started_at ?? null, JSON.stringify(pub.provider_response ?? {}),
         ],
       );
     } else {
       mem.publications.set(pub.id, structuredClone(pub));
     }
     return pub;
+  }
+
+  /**
+   * Compare-and-set state change for the publishing worker. Succeeds only when
+   * the row is still in one of `fromStatuses`, so two workers (or a worker and
+   * a user action) cannot both move the same publication.
+   */
+  async function transitionPublication(
+    tenantId: string,
+    pubId: string,
+    fromStatuses: string[],
+    patch: Partial<PublicationRecord>,
+  ): Promise<PublicationRecord | null> {
+    const now = new Date().toISOString();
+    if (usePg()) {
+      const cols = Object.keys(patch).filter((k) => !['id', 'tenant_id', 'content_item_id', 'created_at', 'version'].includes(k));
+      const sets = cols.map((c, i) => `${c} = $${i + 4}${c === 'provider_response' ? '::jsonb' : ''}`);
+      const values = cols.map((c) => (c === 'provider_response' ? JSON.stringify((patch as any)[c] ?? {}) : (patch as any)[c]));
+      const { rows } = await pool.query(
+        `UPDATE autopilot_publications SET ${[...sets, 'updated_at = NOW()', 'version = version + 1'].join(', ')}
+         WHERE id::text = $1 AND tenant_id = $2 AND status = ANY($3::text[])
+         RETURNING *`,
+        [pubId, tenantId, fromStatuses, ...values],
+      );
+      return (rows[0] as PublicationRecord) ?? null;
+    }
+    const pub = mem.publications.get(pubId);
+    if (!pub || pub.tenant_id !== tenantId || !fromStatuses.includes(pub.status)) return null;
+    Object.assign(pub, patch, { updated_at: now, version: (pub.version ?? 0) + 1 });
+    return structuredClone(pub);
+  }
+
+  /**
+   * Leases due publications with FOR UPDATE SKIP LOCKED, so concurrent workers
+   * never pick the same row. Returns each row with the status it had before.
+   */
+  async function leaseDuePublications(workerId: string, limit = 10, leaseSeconds = 300): Promise<Array<PublicationRecord & { prior_status: string }>> {
+    if (usePg()) {
+      const { rows } = await pool.query(
+        `WITH due AS (
+           SELECT id, status AS prior_status FROM autopilot_publications
+           WHERE paused IS NOT TRUE AND (
+             (status IN ('scheduled','pending') AND scheduled_at IS NOT NULL AND scheduled_at <= NOW())
+             OR (status IN ('retry_wait','remote_processing','reconciliation_required') AND next_attempt_at IS NOT NULL AND next_attempt_at <= NOW())
+             OR (status IN ('claimed','submitting','publishing') AND (lease_expires_at IS NULL OR lease_expires_at < NOW()))
+           )
+           ORDER BY COALESCE(next_attempt_at, scheduled_at) ASC
+           LIMIT $2
+           FOR UPDATE SKIP LOCKED
+         )
+         UPDATE autopilot_publications p
+         SET lease_owner = $1, lease_expires_at = NOW() + ($3 || ' seconds')::interval,
+             status = CASE WHEN due.prior_status IN ('scheduled','pending','retry_wait') THEN 'claimed' ELSE p.status END,
+             version = p.version + 1, updated_at = NOW()
+         FROM due WHERE p.id = due.id
+         RETURNING p.*, due.prior_status`,
+        [workerId, limit, String(leaseSeconds)],
+      );
+      return rows as any;
+    }
+    const now = new Date().toISOString();
+    const out: Array<PublicationRecord & { prior_status: string }> = [];
+    for (const p of mem.publications.values()) {
+      if (out.length >= limit || p.paused) continue;
+      const due =
+        (['scheduled', 'pending'].includes(p.status) && p.scheduled_at && p.scheduled_at <= now) ||
+        (['retry_wait', 'remote_processing', 'reconciliation_required'].includes(p.status) && p.next_attempt_at && p.next_attempt_at <= now) ||
+        (['claimed', 'submitting', 'publishing'].includes(p.status) && (!p.lease_expires_at || p.lease_expires_at < now));
+      if (!due) continue;
+      const prior = p.status;
+      p.lease_owner = workerId;
+      p.lease_expires_at = new Date(Date.now() + leaseSeconds * 1000).toISOString();
+      if (['scheduled', 'pending', 'retry_wait'].includes(prior)) p.status = 'claimed';
+      p.version = (p.version ?? 0) + 1;
+      out.push({ ...structuredClone(p), prior_status: prior });
+    }
+    return out;
+  }
+
+  // ── Generated media assets ──────────────────────────────────────────────────
+  function rowToAsset(r: any): AutopilotAssetRecord {
+    const iso = (v: any) => (v instanceof Date ? v.toISOString() : v ?? null);
+    return {
+      ...r,
+      byte_size: Number(r.byte_size),
+      width: r.width === null ? null : Number(r.width),
+      height: r.height === null ? null : Number(r.height),
+      duration_ms: r.duration_ms === null ? null : Number(r.duration_ms),
+      created_at: iso(r.created_at),
+      deleted_at: iso(r.deleted_at),
+      delivery_verified_at: iso(r.delivery_verified_at),
+      expires_at: iso(r.expires_at),
+    } as AutopilotAssetRecord;
+  }
+
+  async function saveAsset(asset: AutopilotAssetRecord): Promise<AutopilotAssetRecord> {
+    if (usePg()) {
+      const { rows } = await pool.query(
+        `INSERT INTO autopilot_assets (
+           id, tenant_id, content_item_id, workflow_run_id, slot, storage_driver, storage_key, sha256,
+           mime_type, media_type, byte_size, width, height, duration_ms, video_codec, provider, model,
+           provider_request_id, provenance, is_demo, qa_state, delivery_verified_at, delivery_error,
+           retention_class, expires_at, created_at, deleted_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$21,$22,$23,$24,$25,$26,$27)
+         ON CONFLICT (tenant_id, storage_key) DO UPDATE SET
+           delivery_verified_at = COALESCE(EXCLUDED.delivery_verified_at, autopilot_assets.delivery_verified_at),
+           delivery_error = EXCLUDED.delivery_error,
+           qa_state = EXCLUDED.qa_state,
+           retention_class = EXCLUDED.retention_class,
+           deleted_at = EXCLUDED.deleted_at
+         RETURNING *`,
+        [
+          asset.id, asset.tenant_id, asset.content_item_id, asset.workflow_run_id, asset.slot, asset.storage_driver,
+          asset.storage_key, asset.sha256, asset.mime_type, asset.media_type, asset.byte_size, asset.width, asset.height,
+          asset.duration_ms, asset.video_codec, asset.provider, asset.model, asset.provider_request_id,
+          JSON.stringify(asset.provenance ?? {}), asset.is_demo, asset.qa_state, asset.delivery_verified_at,
+          asset.delivery_error, asset.retention_class, asset.expires_at, asset.created_at, asset.deleted_at,
+        ],
+      );
+      return rowToAsset(rows[0]);
+    }
+    const existing = [...mem.assets.values()].find((a) => a.tenant_id === asset.tenant_id && a.storage_key === asset.storage_key);
+    const merged = existing ? { ...existing, ...asset, id: existing.id } : asset;
+    mem.assets.set(merged.id, structuredClone(merged));
+    return structuredClone(merged);
+  }
+
+  async function getAsset(tenantId: string, assetId: string): Promise<AutopilotAssetRecord | null> {
+    if (usePg()) {
+      const { rows } = await pool.query(`SELECT * FROM autopilot_assets WHERE id::text = $1 AND tenant_id = $2 LIMIT 1`, [assetId, tenantId]);
+      return rows[0] ? rowToAsset(rows[0]) : null;
+    }
+    const a = mem.assets.get(assetId);
+    return a && a.tenant_id === tenantId ? structuredClone(a) : null;
+  }
+
+  async function findAssetByKey(tenantId: string, storageKey: string): Promise<AutopilotAssetRecord | null> {
+    if (usePg()) {
+      const { rows } = await pool.query(`SELECT * FROM autopilot_assets WHERE tenant_id = $1 AND storage_key = $2 LIMIT 1`, [tenantId, storageKey]);
+      return rows[0] ? rowToAsset(rows[0]) : null;
+    }
+    const a = [...mem.assets.values()].find((x) => x.tenant_id === tenantId && x.storage_key === storageKey);
+    return a ? structuredClone(a) : null;
+  }
+
+  async function getAssetsByIds(tenantId: string, ids: string[]): Promise<Map<string, AutopilotAssetRecord | null>> {
+    const out = new Map<string, AutopilotAssetRecord | null>();
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (!unique.length) return out;
+    if (usePg()) {
+      const { rows } = await pool.query(`SELECT * FROM autopilot_assets WHERE tenant_id = $1 AND id::text = ANY($2::text[])`, [tenantId, unique]);
+      for (const id of unique) out.set(id, null);
+      for (const r of rows) out.set(String(r.id), rowToAsset(r));
+      return out;
+    }
+    for (const id of unique) {
+      const a = mem.assets.get(id);
+      out.set(id, a && a.tenant_id === tenantId ? structuredClone(a) : null);
+    }
+    return out;
+  }
+
+  async function updateAssetDelivery(tenantId: string, assetId: string, verifiedAt: string | null, error: string | null) {
+    if (usePg()) {
+      await pool.query(
+        `UPDATE autopilot_assets SET delivery_verified_at = $3, delivery_error = $4 WHERE id::text = $1 AND tenant_id = $2`,
+        [assetId, tenantId, verifiedAt, error],
+      );
+      return;
+    }
+    const a = mem.assets.get(assetId);
+    if (a && a.tenant_id === tenantId) Object.assign(a, { delivery_verified_at: verifiedAt, delivery_error: error });
+  }
+
+  async function findWorkflowRunByIdempotencyKey(tenantId: string, contentItemId: string, key: string): Promise<WorkflowRunRecord | null> {
+    if (usePg()) {
+      const { rows } = await pool.query(
+        `SELECT * FROM autopilot_workflow_runs WHERE tenant_id = $1 AND content_item_id::text = $2 AND parameters->>'idempotency_key' = $3 LIMIT 1`,
+        [tenantId, contentItemId, key],
+      );
+      return rows[0] ? ({ ...rows[0], estimated_provider_cost_usd: Number(rows[0].estimated_provider_cost_usd), actual_provider_cost_usd: Number(rows[0].actual_provider_cost_usd) } as WorkflowRunRecord) : null;
+    }
+    const r = [...mem.workflowRuns.values()].find((x) => x.tenant_id === tenantId && x.content_item_id === contentItemId && x.parameters?.idempotency_key === key);
+    return r ? structuredClone(r) : null;
   }
 
   async function getPublication(tenantId: string, pubId: string): Promise<PublicationRecord | null> {
@@ -1247,6 +1452,8 @@ export function createAutopilotRepository({ pool, hasDatabase }: AutopilotRepoDe
   async function purgeTenantAutopilotData(tenantId: string) {
     if (usePg()) {
       await pool.query(`DELETE FROM autopilot_website_scans WHERE tenant_id = $1`, [tenantId]).catch(() => {});
+      await pool.query(`DELETE FROM autopilot_asset_blobs WHERE tenant_id = $1`, [tenantId]);
+      await pool.query(`DELETE FROM autopilot_assets WHERE tenant_id = $1`, [tenantId]);
       await pool.query(`DELETE FROM autopilot_budget_reservations WHERE tenant_id = $1`, [tenantId]).catch(() => {});
       await pool.query(`DELETE FROM autopilot_tenant_controls WHERE tenant_id = $1`, [tenantId]).catch(() => {});
       await pool.query(`DELETE FROM autopilot_content_item_revisions WHERE tenant_id = $1`, [tenantId]).catch(() => {});
@@ -1287,6 +1494,15 @@ export function createAutopilotRepository({ pool, hasDatabase }: AutopilotRepoDe
     for (const [k, v] of mem.experiments) if (v.tenant_id === tenantId) mem.experiments.delete(k);
     for (const [k, v] of mem.recommendations) if (v.tenant_id === tenantId) mem.recommendations.delete(k);
     mem.auditEvents = mem.auditEvents.filter((a) => a.tenant_id !== tenantId);
+    for (const [k, v] of mem.assets) if (v.tenant_id === tenantId) mem.assets.delete(k);
+  }
+
+  async function listTenantAssetKeys(tenantId: string): Promise<Array<{ storage_driver: string; storage_key: string }>> {
+    if (usePg()) {
+      const { rows } = await pool.query(`SELECT storage_driver, storage_key FROM autopilot_assets WHERE tenant_id = $1`, [tenantId]);
+      return rows;
+    }
+    return [...mem.assets.values()].filter((a) => a.tenant_id === tenantId).map((a) => ({ storage_driver: a.storage_driver, storage_key: a.storage_key }));
   }
 
   return {
@@ -1333,6 +1549,15 @@ export function createAutopilotRepository({ pool, hasDatabase }: AutopilotRepoDe
     listExperiments,
     claimPublicationForExecution,
     listDuePublications,
+    transitionPublication,
+    leaseDuePublications,
+    saveAsset,
+    getAsset,
+    findAssetByKey,
+    getAssetsByIds,
+    updateAssetDelivery,
+    findWorkflowRunByIdempotencyKey,
+    listTenantAssetKeys,
     recordContentItemRevision,
     exportTenantAutopilotData,
     purgeTenantAutopilotData,

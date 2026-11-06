@@ -1,3 +1,5 @@
+import { tourAction } from '../components/tour/tourCore';
+import { useTourTab } from '../components/tour/useTourTab';
 import { useEffect, useState, useCallback } from 'react';
 import { PlatformLogo } from '../components/PlatformLogo';
 import {
@@ -767,13 +769,13 @@ function CampaignsTab({ onSelect }: { onSelect: (c: Campaign) => void }) {
     <>
       {showBuilder && <BuilderWizard onClose={() => setShowBuilder(false)} onDone={c => { setCampaigns(prev => [c, ...prev]); setShowBuilder(false); }} />}
       {campaigns.length === 0 ? (
-        <EmptyState icon={<Megaphone size={24} />} title="No campaigns yet" description="Create your first campaign to start tracking performance across channels." action={<button onClick={() => setShowBuilder(true)} className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"><Plus size={14} /> New Campaign</button>} />
+        <EmptyState icon={<Megaphone size={24} />} title="No campaigns yet" description="Create your first campaign to start tracking performance across channels." action={<button data-tour="campaigns-new" onClick={() => setShowBuilder(true)} className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"><Plus size={14} /> New Campaign</button>} />
       ) : (
       <>
       <div className="mb-6 flex items-center justify-between gap-3">
         <div className="text-sm text-slate-500">{campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''}</div>
         <div className="flex items-center gap-2">
-          <div className="flex rounded-xl border border-slate-200 overflow-hidden">
+          <div data-tour="campaigns-view" className="flex rounded-xl border border-slate-200 overflow-hidden">
             <button onClick={() => setViewMode('grid')} title="Grid view" className={`px-3 py-2 text-xs font-semibold transition-colors ${viewMode === 'grid' ? 'bg-slate-950 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}>
               ▦ Grid
             </button>
@@ -781,7 +783,7 @@ function CampaignsTab({ onSelect }: { onSelect: (c: Campaign) => void }) {
               <Calendar size={12} /> Calendar
             </button>
           </div>
-          <button data-tour-id="btn-new-campaign" onClick={() => setShowBuilder(true)} className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800">
+          <button data-tour-id="btn-new-campaign" data-tour="campaigns-new" onClick={() => setShowBuilder(true)} className="inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800">
             <Plus size={14} /> New Campaign
           </button>
         </div>
@@ -1961,6 +1963,7 @@ type Tab = 'campaigns' | 'funnels' | 'links' | 'metrics';
 
 export default function MarketingCampaigns() {
   const [activeTab, setActiveTab] = useState<Tab>('campaigns');
+  useTourTab('campaigns', ['campaigns', 'funnels', 'links', 'metrics'] as const, setActiveTab);
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
 
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
@@ -1995,9 +1998,9 @@ export default function MarketingCampaigns() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-slate-200">
+      <div data-tour="campaigns-tabs" className="flex gap-1 border-b border-slate-200">
         {TABS.map(t => (
-          <button key={t.id} onClick={() => setActiveTab(t.id)} className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-all -mb-px ${activeTab === t.id ? 'border-slate-950 text-slate-950' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+          <button key={t.id} data-tour={`tab-campaigns-${t.id}`} onClick={() => { setActiveTab(t.id); tourAction(`campaigns-tab:${t.id}`); }} className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-all -mb-px ${activeTab === t.id ? 'border-slate-950 text-slate-950' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
             {t.icon} {t.label}
           </button>
         ))}

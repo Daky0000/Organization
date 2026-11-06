@@ -83,8 +83,9 @@ export class InstagramBusinessPlatform implements SocialPlatform {
     if (!media.length) {
       return { ok: false, error: 'Instagram feed posts require at least one image.' };
     }
-    if (media.length > 10) {
-      return { ok: false, error: 'Instagram carousel supports up to 10 images.' };
+    // developers.facebook.com/docs/instagram-platform/content-publishing (checked 2026-10-29): up to 20 items.
+    if (media.length > 20) {
+      return { ok: false, error: 'Instagram carousels support up to 20 items.' };
     }
     for (const item of media) {
       const mime = String(item?.mimeType || '').toLowerCase();
@@ -211,11 +212,18 @@ export class InstagramBusinessPlatform implements SocialPlatform {
   }
 
   private async _publishContainer(graphBase: string, igUserId: string, accessToken: string, creationId: string): Promise<PlatformPostResult> {
-    const pubResp = await axios.post(
-      `${graphBase}/${encodeURIComponent(igUserId)}/media_publish`,
-      new URLSearchParams({ creation_id: creationId, access_token: accessToken }).toString(),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, validateStatus: () => true, timeout: 20000 }
-    );
+    let pubResp;
+    try {
+      pubResp = await axios.post(
+        `${graphBase}/${encodeURIComponent(igUserId)}/media_publish`,
+        new URLSearchParams({ creation_id: creationId, access_token: accessToken }).toString(),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, validateStatus: () => true, timeout: 20000 }
+      );
+    } catch (err: any) {
+      // The request may have reached Instagram and published. Retrying would
+      // post twice; the caller has to check the container first.
+      return { status: 'failed', error: `Instagram publish response was lost (${err?.code || 'network error'}); check the account before retrying.`, code: 'PUBLISH_OUTCOME_UNKNOWN', retryable: false, raw: { container_id: creationId } };
+    }
     const pubData: any = pubResp.data || {};
     if (pubResp.status >= 400) {
       return {
@@ -226,7 +234,125 @@ export class InstagramBusinessPlatform implements SocialPlatform {
         raw: pubData,
       };
     }
-    return { status: 'published', platformPostId: String(pubData?.id || creationId), raw: pubData };
+    if (!pubData?.id) {
+      // Never report the container ID as the post ID.
+      return { status: 'failed', error: 'Instagram accepted the publish call but returned no media ID; check the account.', code: 'PUBLISH_RESPONSE_MISSING_ID', retryable: false, raw: { ...pubData, container_id: creationId } };
+    }
+    return { status: 'published', platformPostId: String(pubData.id), raw: pubData };
+  }
+
+  // ── Step-wise publishing (used by the autopilot worker) ────────────────────
+  // Each step returns at once so the caller can persist the container ID and
+  // poll across worker ticks instead of blocking, and can reconcile a lost
+  // publish response by container status rather than resubmitting.
+
+  async createContainerForPost(post: PostObject, ctx: PlatformContext): Promise<{ ok: true; containerId: string } | { ok: false; code: string; message: string; retryable: boolean; outcome: 'definitive' | 'unknown' }> {
+    const igUserId = String(ctx.accountId || '').trim();
+    if (!igUserId) return { ok: false, code: 'ACCOUNT_NOT_CONNECTED', message: 'Instagram account ID is missing.', retryable: false, outcome: 'definitive' };
+    const validation = this.validate(post);
+    if (!validation.ok) return { ok: false, code: 'INVALID_PAYLOAD_OR_MEDIA', message: validation.error || 'Invalid post', retryable: false, outcome: 'definitive' };
+    const helpers = (ctx.helpers || {}) as InstagramHelpers;
+    const graphBase = resolveGraphBase(ctx.accessToken, helpers);
+    const media = Array.isArray(post.media) ? post.media : [];
+    const caption = String(post?.content?.text || '').trim();
+    const postType = String(post?.type || 'FEED_POST').toUpperCase();
+    try {
+      let params: Record<string, string>;
+      if (postType === 'STORY') {
+        const item = media[0];
+        params = { media_type: 'STORIES', ...(isVideoItem(item) ? { video_url: item.url } : { image_url: item.url }) };
+      } else if (postType === 'CAROUSEL' || media.length > 1) {
+        const childIds: string[] = [];
+        for (const item of media) {
+          const isVideo = isVideoItem(item);
+          const child = await this._createContainer(graphBase, igUserId, ctx.accessToken, isVideo
+            ? { is_carousel_item: 'true', media_type: 'VIDEO', video_url: item.url }
+            : { is_carousel_item: 'true', image_url: item.url });
+          if ('error' in child) return { ok: false, code: child.error.code || 'CONTAINER_CREATE_FAILED', message: child.error.error || 'Instagram carousel item failed.', retryable: Boolean(child.error.retryable), outcome: 'definitive' };
+          const ready = await this._waitForContainer(graphBase, child.id, ctx.accessToken, isVideo ? VIDEO_WAIT : IMAGE_WAIT);
+          if (!ready.ready) return { ok: false, code: 'CAROUSEL_ITEM_NOT_READY', message: ready.error, retryable: ready.retryable, outcome: 'definitive' };
+          childIds.push(child.id);
+        }
+        params = { media_type: 'CAROUSEL', children: childIds.join(','), caption };
+      } else {
+        const item = media[0];
+        params = postType === 'REEL' || isVideoItem(item) ? { media_type: 'REELS', video_url: item.url, caption } : { image_url: item.url, caption };
+      }
+      const container = await this._createContainer(graphBase, igUserId, ctx.accessToken, params);
+      if ('error' in container) return { ok: false, code: container.error.code || 'CONTAINER_CREATE_FAILED', message: container.error.error || 'Instagram media create failed', retryable: Boolean(container.error.retryable), outcome: 'definitive' };
+      return { ok: true, containerId: container.id };
+    } catch (err: any) {
+      // Unpublished containers never post, so this is safe for the caller to retry.
+      return { ok: false, code: 'CONTAINER_CREATE_FAILED', message: err?.message || 'Instagram media create failed', retryable: true, outcome: 'unknown' };
+    }
+  }
+
+  async getContainerStatus(containerId: string, ctx: PlatformContext): Promise<{ status: 'FINISHED' | 'IN_PROGRESS' | 'ERROR' | 'EXPIRED' | 'PUBLISHED' | 'UNKNOWN'; detail?: string }> {
+    const graphBase = resolveGraphBase(ctx.accessToken, (ctx.helpers || {}) as InstagramHelpers);
+    try {
+      const resp = await axios.get(`${graphBase}/${encodeURIComponent(containerId)}`, {
+        params: { fields: 'status_code,status', access_token: ctx.accessToken },
+        validateStatus: () => true,
+        timeout: 10000,
+      });
+      const code = String(resp.data?.status_code || '').toUpperCase();
+      if (['FINISHED', 'IN_PROGRESS', 'ERROR', 'EXPIRED', 'PUBLISHED'].includes(code)) return { status: code as any, detail: resp.data?.status };
+      return { status: 'UNKNOWN', detail: resp.data?.error?.message || `HTTP ${resp.status}` };
+    } catch (err: any) {
+      return { status: 'UNKNOWN', detail: err?.code || 'network error' };
+    }
+  }
+
+  async publishCreatedContainer(containerId: string, ctx: PlatformContext): Promise<{ ok: true; mediaId: string; permalink: string | null } | { ok: false; code: string; message: string; retryable: boolean; outcome: 'definitive' | 'unknown' }> {
+    const igUserId = String(ctx.accountId || '').trim();
+    const graphBase = resolveGraphBase(ctx.accessToken, (ctx.helpers || {}) as InstagramHelpers);
+    const res = await this._publishContainer(graphBase, igUserId, ctx.accessToken, containerId);
+    if (res.status !== 'published' || !res.platformPostId) {
+      const unknown = res.code === 'PUBLISH_OUTCOME_UNKNOWN' || res.code === 'PUBLISH_RESPONSE_MISSING_ID';
+      return { ok: false, code: res.code || 'PUBLISH_FAILED', message: res.error || 'Instagram publish failed', retryable: Boolean(res.retryable), outcome: unknown ? 'unknown' : 'definitive' };
+    }
+    return { ok: true, mediaId: res.platformPostId, permalink: await this.getPermalink(res.platformPostId, ctx) };
+  }
+
+  async getPermalink(mediaId: string, ctx: PlatformContext): Promise<string | null> {
+    const graphBase = resolveGraphBase(ctx.accessToken, (ctx.helpers || {}) as InstagramHelpers);
+    try {
+      const resp = await axios.get(`${graphBase}/${encodeURIComponent(mediaId)}`, {
+        params: { fields: 'permalink', access_token: ctx.accessToken },
+        validateStatus: () => true,
+        timeout: 10000,
+      });
+      const link = String(resp.data?.permalink || '');
+      return /^https:\/\/(www\.)?instagram\.com\//.test(link) ? link : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Finds a post published after `sinceIso` whose caption starts with the
+   * caption we sent. Used only to recover a lost publish response; with no
+   * caption to match there is no safe match, and null is returned.
+   */
+  async findRecentMediaByCaption(ctx: PlatformContext, caption: string, sinceIso: string): Promise<{ mediaId: string; permalink: string | null } | null> {
+    const prefix = String(caption || '').trim().slice(0, 80);
+    if (!prefix) return null;
+    const igUserId = String(ctx.accountId || '').trim();
+    const graphBase = resolveGraphBase(ctx.accessToken, (ctx.helpers || {}) as InstagramHelpers);
+    try {
+      const resp = await axios.get(`${graphBase}/${encodeURIComponent(igUserId)}/media`, {
+        params: { fields: 'id,permalink,timestamp,caption', limit: 25, access_token: ctx.accessToken },
+        validateStatus: () => true,
+        timeout: 15000,
+      });
+      const since = Date.parse(sinceIso) - 2 * 60_000;
+      const hits = (Array.isArray(resp.data?.data) ? resp.data.data : [])
+        .filter((m: any) => Date.parse(m.timestamp) >= since && String(m.caption || '').trim().startsWith(prefix));
+      if (hits.length !== 1) return null; // zero or ambiguous: leave it to a person
+      return { mediaId: String(hits[0].id), permalink: hits[0].permalink ? String(hits[0].permalink) : null };
+    } catch {
+      return null;
+    }
   }
 
   private async _createAndPublish(

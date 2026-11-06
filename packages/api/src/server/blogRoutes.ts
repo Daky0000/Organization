@@ -5,6 +5,7 @@ import type { Request } from '../types/http.ts';
 import type { Pool } from 'pg';
 import { registerBlogAnalyticsRoutes } from './blogAnalyticsRoutes.ts';
 import { logger } from '../logger.ts';
+import { learnFromPostDelete, learnFromPostUpdate } from './preferenceMemory.ts';
 
 type AuthResult = { userId: string; email?: string } | null;
 type RequireAuthFn = (req: Request, res: Response) => AuthResult;
@@ -375,6 +376,7 @@ export function registerBlogRoutes({
     }
     if (willSchedule) void fireWorkflowTriggers(user.userId, 'post_scheduled', rows[0]);
     clearCalendarCacheForUser(user.userId);
+    void learnFromPostUpdate((sql, p) => pool!.query(sql, p as any[]), user.userId, cur, rows[0]);
     return res.json({ success: true, post: rows[0] });
   });
 
@@ -383,8 +385,10 @@ export function registerBlogRoutes({
     const user = requireAuth(req, res);
     if (!user) return;
     const { id } = req.params;
+    const before = await pool!.query('SELECT * FROM blog_posts WHERE id=$1 AND user_id=$2', [id, user.userId]).catch(() => ({ rows: [] as any[] }));
     await pool!.query('DELETE FROM blog_posts WHERE id=$1 AND user_id=$2', [id, user.userId]);
     clearCalendarCacheForUser(user.userId);
+    void learnFromPostDelete((sql, p) => pool!.query(sql, p as any[]), user.userId, before.rows[0]);
     return res.json({ success: true });
   });
 
@@ -747,6 +751,7 @@ export function registerBlogRoutes({
       const end = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
       const { rows } = await pool!.query(
         `SELECT id, title, status, scheduled_at, published_at, created_at, updated_at,
+                content, featured_image, media_assets, video_url, social_platform, post_format,
                 COALESCE(scheduled_at, CASE WHEN status = 'published' THEN published_at END, created_at) AS calendar_at
          FROM blog_posts
          WHERE user_id=$1
@@ -763,7 +768,13 @@ export function registerBlogRoutes({
         if (!postsByDate[dateKey]) postsByDate[dateKey] = [];
         postsByDate[dateKey].push(post);
       });
-      const payload = { year, month, posts_by_date: postsByDate, total_posts: rows.length };
+      // Which platforms are connected: the legend shows them, and a post for an
+      // unconnected platform says it needs connecting before it can publish.
+      const connected = await pool!.query(
+        `SELECT DISTINCT LOWER(platform) AS platform FROM social_accounts WHERE user_id=$1 AND connected=true`,
+        [user.userId],
+      ).then((r) => r.rows.map((x: any) => (x.platform === 'twitter' ? 'x' : String(x.platform)))).catch(() => [] as string[]);
+      const payload = { year, month, posts_by_date: postsByDate, total_posts: rows.length, connected_platforms: [...new Set(connected)] };
       setCalendarCache(cacheKey, payload);
       return res.json({ success: true, ...payload });
     } catch (err) {
@@ -783,7 +794,7 @@ export function registerBlogRoutes({
     }
     if (!hasDatabase()) return res.json({ success: true, posts: [] });
     try {
-      let q = `SELECT id, title, status, scheduled_at, created_at, updated_at FROM blog_posts WHERE user_id=$1 AND status=$2`;
+      let q = `SELECT id, title, status, scheduled_at, created_at, updated_at, content, featured_image, media_assets, video_url, social_platform, post_format FROM blog_posts WHERE user_id=$1 AND status=$2`;
       const params: (string | number)[] = [user.userId, rawStatus];
       if (rawStatus === 'draft') q += ' AND scheduled_at IS NULL';
       q += ' ORDER BY created_at DESC';
@@ -895,6 +906,8 @@ export function registerBlogRoutes({
         params
       );
       clearCalendarCacheForUser(user.userId);
+      // What the user changed on an AI-made or social post is remembered for next time.
+      void learnFromPostUpdate((sql, p) => pool!.query(sql, p as any[]), user.userId, current, rows[0]);
       return res.json({ success: true, post: rows[0] });
     } catch (err) {
       logger.error('post update error:', err);
@@ -908,10 +921,11 @@ export function registerBlogRoutes({
     if (!hasDatabase()) return res.status(503).json({ success: false, error: 'Database not configured' });
     const { id } = req.params;
     try {
-      const existing = await pool!.query('SELECT id FROM blog_posts WHERE id=$1 AND user_id=$2', [id, user.userId]);
+      const existing = await pool!.query('SELECT * FROM blog_posts WHERE id=$1 AND user_id=$2', [id, user.userId]);
       if (!existing.rows.length) return res.status(404).json({ success: false, error: 'Post not found' });
       await pool!.query('DELETE FROM blog_posts WHERE id=$1 AND user_id=$2', [id, user.userId]);
       clearCalendarCacheForUser(user.userId);
+      void learnFromPostDelete((sql, p) => pool!.query(sql, p as any[]), user.userId, existing.rows[0]);
       return res.json({ success: true });
     } catch (err) {
       logger.error('post delete error:', err);

@@ -412,14 +412,16 @@ export default function PerformanceTab({ onRefreshOverview }: Props) {
                     </Td>
                     <Td>
                       <Badge tone={e.execution_mode === 'live_provider' ? 'positive' : 'muted'}>
-                        {e.execution_mode === 'live_provider' ? 'Live Provider' : 'Sandbox Fallback'}
+                        {e.execution_mode === 'live_provider' ? 'Live Provider' : 'DEMO — NOT PUBLISHABLE'}
                       </Badge>
                     </Td>
                     <Td>
                       <span className="font-mono text-xs text-ink">${Number(e.cost_usd ?? 0).toFixed(3)}</span>
+                      <div className="font-mono text-[10px] text-muted">{e.cost_status === 'actual' ? 'actual (provider usage)' : e.cost_status === 'mixed' ? 'partly estimated' : e.cost_status === 'none' ? 'no spend' : 'estimate'}</div>
                     </Td>
                     <Td>
                       <span className="font-mono text-xs text-ink">{e.credits_deducted ?? 0} cr</span>
+                      {Number(e.credits_held ?? 0) > 0 && <div className="font-mono text-[10px] text-muted">{e.credits_held} cr held</div>}
                     </Td>
                     <Td>
                       <Badge tone={e.status === 'settled' ? 'positive' : e.status === 'released' ? 'muted' : 'info'}>

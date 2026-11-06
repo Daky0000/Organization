@@ -15,6 +15,7 @@ type Plan = {
   tone: string;
   per_day: number;
   duration_days: number;
+  auto_publish?: boolean;
   ends_at: string | null;
   use_liked_style: boolean;
   generate_image: boolean;
@@ -100,13 +101,18 @@ export default function AutoContentPlans() {
     return () => clearInterval(t);
   }, [plans, load]);
 
-  const act = async (plan: Plan, action: 'toggle' | 'delete' | 'run' | 'start') => {
+  const act = async (plan: Plan, action: 'toggle' | 'delete' | 'run' | 'start' | 'autopublish') => {
     setBusy(`${action}:${plan.id}`);
     setMsg(null);
     try {
       if (action === 'delete') {
         if (!window.confirm(`Delete plan "${plan.name}"? Already-generated posts stay in Content → Posts.`)) { setBusy(null); return; }
         await fetch(`${API_BASE_URL}/api/content-plans/${plan.id}`, { method: 'DELETE', headers: hdrs() });
+      } else if (action === 'autopublish') {
+        await fetch(`${API_BASE_URL}/api/content-plans/${plan.id}`, {
+          method: 'PATCH', headers: hdrs(),
+          body: JSON.stringify({ auto_publish: !plan.auto_publish }),
+        });
       } else if (action === 'toggle') {
         await fetch(`${API_BASE_URL}/api/content-plans/${plan.id}`, {
           method: 'PATCH', headers: hdrs(),
@@ -179,6 +185,7 @@ export default function AutoContentPlans() {
                   <p className="mt-0.5 text-xs text-slate-500 truncate">{p.topic || 'AI-recommended promotion'}</p>
                   <p className="mt-1.5 text-[11px] text-slate-400">
                     {p.per_day}×/day{p.ends_at ? ` until ${new Date(p.ends_at).toLocaleDateString()}` : ` for ${p.duration_days} days`}
+                    {p.auto_publish ? ' · publishes automatically' : ' · held for your review'}
                     {p.status === 'pricing' && ' · Atlas is planning, Ledger is calculating the cost — you\'ll get a notification'}
                     {p.status === 'priced' && ` · ${p.plan_blueprint?.total_posts ?? p.per_day * p.duration_days} posts (${p.plan_blueprint?.total_images ?? 0} with images) · total: ✦${Number(p.estimated_credits).toLocaleString()} credits`}
                     {['active', 'paused', 'completed'].includes(p.status) && ` · ${p.pieces_created} piece${Number(p.pieces_created) === 1 ? '' : 's'} created${Number(p.pieces_failed) > 0 ? ` · ${p.pieces_failed} failed` : ''}`}
@@ -202,6 +209,12 @@ export default function AutoContentPlans() {
                         className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50">
                         {busy === `toggle:${p.id}` ? <Loader2 size={12} className="animate-spin" /> : p.status === 'active' ? <Pause size={12} /> : <Play size={12} />}
                         {p.status === 'active' ? 'Pause' : 'Resume'}
+                      </button>
+                      <button type="button" onClick={() => void act(p, 'autopublish')} disabled={busy !== null}
+                        title={p.auto_publish ? 'New pieces publish automatically — click to hold them for review' : 'New pieces wait for review — click to publish them automatically'}
+                        className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold ${p.auto_publish ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                        {busy === `autopublish:${p.id}` ? <Loader2 size={12} className="animate-spin" /> : null}
+                        Auto-publish {p.auto_publish ? 'on' : 'off'}
                       </button>
                     </>
                   )}
@@ -280,6 +293,7 @@ function CreatePlanModal({ onClose, onCreated }: { onClose: () => void; onCreate
   const [durationDays, setDurationDays] = useState(30);
   const [imageMode, setImageMode] = useState<'auto' | 'always' | 'never'>('auto');
   const [useLikedStyle, setUseLikedStyle] = useState(true);
+  const [autoPublish, setAutoPublish] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [socials, setSocials] = useState<string[] | null>(null);
@@ -310,6 +324,7 @@ function CreatePlanModal({ onClose, onCreated }: { onClose: () => void; onCreate
           name, topic, tone, per_day: perDay, duration_days: durationDays,
           image_mode: imageMode, ai_recommended: aiRecommended,
           custom_instructions: customInstructions, use_liked_style: useLikedStyle,
+          auto_publish: autoPublish,
         }),
       });
       const d = await r.json();
@@ -385,7 +400,7 @@ function CreatePlanModal({ onClose, onCreated }: { onClose: () => void; onCreate
           <div className="grid grid-cols-3 gap-3">
             <label className={`block ${labelCls}`}>Per day
               <select value={perDay} onChange={e => setPerDay(Number(e.target.value))} className={`${inputCls} mt-1.5 normal-case font-normal tracking-normal`}>
-                {[1, 2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}×</option>)}
+                {[1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 30, 36, 48].map(n => <option key={n} value={n}>{n}×</option>)}
               </select>
             </label>
             <label className={`block ${labelCls}`}>For
@@ -415,6 +430,17 @@ function CreatePlanModal({ onClose, onCreated }: { onClose: () => void; onCreate
           <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 cursor-pointer">
             <input type="checkbox" checked={useLikedStyle} onChange={e => setUseLikedStyle(e.target.checked)} className="accent-indigo-500" />
             <span className="flex items-center gap-2 text-sm font-semibold text-slate-700"><ImageIcon size={14} className="text-slate-400" /> Match my liked images' visual style</span>
+          </label>
+
+          <label className={`flex items-center gap-3 rounded-xl border px-4 py-3 cursor-pointer ${autoPublish ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
+            <input type="checkbox" checked={autoPublish} onChange={e => setAutoPublish(e.target.checked)} className="accent-amber-500" />
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-slate-700">Publish automatically</span>
+              <span className="block text-[11px] text-slate-500">
+                Each piece goes out about 10 minutes after it is created, without waiting for your approval. Off: pieces wait for your review.
+                {perDay > 6 && !autoPublish && ` At ${perDay} a day that is ${perDay} approvals daily.`}
+              </span>
+            </span>
           </label>
 
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">

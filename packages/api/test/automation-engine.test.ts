@@ -201,14 +201,16 @@ test('credits: non-integer and absurd amounts rejected', async () => {
   }
 });
 
-test('credits: cost math matches real API prices with 3x margin', async () => {
-  const { computeAICostUsd, creditsForCostUsd, AI_PROFIT_MULTIPLIER, CREDIT_USD } = await import('../src/ai-helpers.ts');
+test('credits: cost math matches real API prices with a 1.54x margin at the cheapest credit price', async () => {
+  const { computeAICostUsd, creditsForCostUsd, AI_PROFIT_MULTIPLIER } = await import('../src/ai-helpers.ts');
+  const { setCreditValueForTests } = await import('../src/server/aiPricing.ts');
+  setCreditValueForTests(149 / 20000); // Power pack: $0.00745 per credit
   // Opus 4.8: $5/M in, $25/M out — 3K in + 500 out = $0.015 + $0.0125 = $0.0275
   const cost = computeAICostUsd('claude-opus-4-8', 3000, 500, 0);
   assert.ok(Math.abs(cost - 0.0275) < 1e-9, `cost=${cost}`);
-  // ×3 margin at $0.01/credit → ceil(8.25) = 9 credits
-  assert.equal(creditsForCostUsd(cost), 9);
-  // Haiku: $1/M in, $5/M out — 2K in + 800 out = $0.006 → 2 credits
+  // ×1.54 at $0.00745/credit → ceil(5.68) = 6 credits
+  assert.equal(creditsForCostUsd(cost), 6);
+  // Haiku: $1/M in, $5/M out — 2K in + 800 out = $0.006 → ceil(1.24) = 2 credits
   assert.equal(creditsForCostUsd(computeAICostUsd('claude-haiku-4-5', 2000, 800)), 2);
   // Cache reads bill at ~0.1x input
   const cached = computeAICostUsd('claude-opus-4-8', 0, 0, 10000);
@@ -218,8 +220,7 @@ test('credits: cost math matches real API prices with 3x margin', async () => {
   assert.equal(creditsForCostUsd(0.0001), 1);
   // Unknown models fall back to Sonnet-tier pricing (never undercharge to 0-cost)
   assert.ok(computeAICostUsd('mystery-model', 1000, 1000) > 0);
-  assert.equal(AI_PROFIT_MULTIPLIER, 3);
-  assert.equal(CREDIT_USD, 0.01);
+  assert.equal(AI_PROFIT_MULTIPLIER, 1.54);
 });
 
 test('routes: distribution/automation endpoints resolve at /api/* (double-prefix regression)', async () => {

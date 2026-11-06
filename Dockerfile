@@ -49,6 +49,11 @@ RUN npm ci --include=dev --no-audit --no-fund --workspace @contentflow/api
 COPY packages/api ./packages/api
 COPY scripts ./scripts
 
+# Railway passes this build argument; scripts/build-info.mjs bakes it into the
+# bundle so /api/health reports the SHA the image was built from.
+ARG RAILWAY_GIT_COMMIT_SHA
+ENV RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA
+
 RUN npm --workspace @contentflow/api run build
 
 # ── Stage 3: Production image ─────────────────────────────────────────────────

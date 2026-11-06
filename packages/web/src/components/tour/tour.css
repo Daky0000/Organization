@@ -1,0 +1,70 @@
+/* Guided tours — same look as the DakyX editor's tours, in this app's tokens. */
+
+.dt-veil { position: fixed; inset: 0; z-index: 10000; background: rgba(4, 7, 16, .62); }
+/* Clicks outside the spotlight land here (and shake the card); the spotlight itself stays usable. */
+.dt-block { position: fixed; z-index: 10000; background: transparent; }
+
+.dt-ring {
+  position: fixed; z-index: 10000; border-radius: 12px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(4, 7, 16, .62), 0 0 0 2px var(--blue, #2563EB);
+  transition: all .4s cubic-bezier(.22, 1, .36, 1);
+}
+.dt-ring.wait { animation: dt-ring 1.4s infinite; }
+@keyframes dt-ring {
+  0%, 100% { box-shadow: 0 0 0 9999px rgba(4, 7, 16, .62), 0 0 0 2px var(--blue, #2563EB); }
+  50% { box-shadow: 0 0 0 9999px rgba(4, 7, 16, .62), 0 0 0 7px rgba(37, 99, 235, .45); }
+}
+
+.dt-card {
+  position: fixed; z-index: 10001; width: 320px; max-width: calc(100vw - 24px);
+  background: var(--white, #fff); color: var(--ink, #0D1526);
+  border: 1px solid var(--line, #E3E6EB); border-radius: 16px;
+  box-shadow: 0 16px 48px rgba(13, 21, 38, .22);
+  transition: left .4s cubic-bezier(.22, 1, .36, 1), top .4s cubic-bezier(.22, 1, .36, 1);
+  animation: dt-in .3s ease; outline: none; font-family: inherit;
+}
+.dt-card.center { width: 420px; overflow: hidden; }
+.dt-card.corner { right: 20px; bottom: 20px; width: 340px; }
+@keyframes dt-in { from { opacity: 0; transform: translateY(6px); } }
+
+.dt-art { height: 128px; background: linear-gradient(135deg, var(--blue, #2563EB), #091833); position: relative; overflow: hidden; display: grid; place-items: center; color: #fff; }
+.dt-art .dt-art-title { font-size: 13px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; opacity: .9; }
+
+.dt-body { padding: 16px 18px 14px; display: flex; flex-direction: column; gap: 8px; }
+.dt-step { font: 500 11px ui-monospace, Menlo, monospace; color: var(--blue, #2563EB); letter-spacing: .04em; }
+.dt-body h3 { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.3; text-wrap: balance; }
+.dt-body p { margin: 0; color: var(--muted, #5B6374); font-size: 13px; line-height: 1.55; }
+.dt-tip { display: flex; gap: 8px; align-items: center; background: var(--soft, #F6F7F9); border-radius: 8px; padding: 7px 10px; font-size: 12px; }
+.dt-tip kbd { margin-left: auto; font: 10.5px ui-monospace, Menlo, monospace; border: 1px solid var(--line, #E3E6EB); border-radius: 4px; padding: 0 4px; color: var(--muted, #5B6374); }
+.dt-do { display: flex; align-items: center; gap: 8px; background: var(--pale, #EAF1FF); color: var(--blue-d, #1D4ED8); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; font-weight: 600; }
+.dt-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--blue, #2563EB); animation: dt-pl 1.2s infinite; flex: none; }
+@keyframes dt-pl { 50% { transform: scale(1.6); opacity: .4; } }
+
+.dt-foot { display: flex; align-items: center; gap: 8px; padding: 0 18px 16px; }
+.dt-dots { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
+.dt-dots i { width: 6px; height: 6px; border-radius: 3px; background: var(--line, #E3E6EB); transition: all .25s; }
+.dt-dots i.on { width: 18px; background: var(--blue, #2563EB); }
+.dt-dots i.done { background: var(--faint, #8A91A0); }
+.dt-btn { border-radius: 10px; padding: 7px 12px; font-size: 12.5px; font-weight: 700; line-height: 1; white-space: nowrap; cursor: pointer; }
+.dt-btn:focus-visible { outline: 2px solid var(--blue, #2563EB); outline-offset: 2px; }
+.dt-pri { background: var(--blue, #2563EB); color: #fff; border: 1px solid var(--blue, #2563EB); }
+.dt-pri:hover { background: var(--blue-d, #1D4ED8); }
+.dt-ghost { background: #fff; color: var(--ink, #0D1526); border: 1px solid var(--line, #E3E6EB); }
+.dt-ghost:hover { background: var(--soft, #F6F7F9); }
+.dt-skip { font-size: 12px; color: var(--muted, #5B6374); padding: 0 6px; background: none; border: 0; cursor: pointer; }
+.dt-skip:hover { color: var(--ink, #0D1526); }
+.dt-arrow { position: absolute; width: 12px; height: 12px; background: #fff; border: 1px solid var(--line, #E3E6EB); transform: rotate(45deg); }
+
+.dt-done ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.dt-done li { display: flex; gap: 8px; align-items: center; }
+.dt-done li svg { color: #2F8F5B; flex: none; }
+
+.dt-confetti { position: fixed; inset: 0; pointer-events: none; z-index: 10002; overflow: hidden; }
+.dt-confetti i { position: absolute; top: -12px; width: 8px; height: 12px; border-radius: 2px; animation: dt-fall 1.6s ease-in forwards; }
+@keyframes dt-fall { to { transform: translateY(105vh) rotate(540deg); opacity: .2; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dt-ring, .dt-card { transition: none; animation: none; }
+  .dt-ring.wait, .dt-pulse { animation: none; }
+  .dt-confetti { display: none; }
+}

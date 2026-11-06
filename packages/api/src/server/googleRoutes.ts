@@ -1,4 +1,5 @@
 import express from 'express';
+import { GOOGLE_IMAGE_USD, GOOGLE_VIDEO_USD_PER_SEC, creditsForUsd } from './aiPricing.ts';
 import { chargeAICredits } from '../ai-helpers.ts';
 import type { Router, Response } from 'express';
 import type { Request } from '../types/http.ts';
@@ -170,7 +171,7 @@ export function registerGoogleRoutes({ requireAuth, requireAdmin, hasDatabase, d
     const apiKey = await getGoogleApiKey();
     if (!apiKey) return res.status(503).json({ error: 'Google API not configured' });
 
-    const creditCost = cfg.credits;
+    const creditCost = creditsForUsd(GOOGLE_IMAGE_USD[model] ?? 0.134);
     const credRow = await pool.query<{ credits: number }>('SELECT credits FROM user_credits WHERE user_id=$1', [auth.userId])
       .catch(() => ({ rows: [] as { credits: number }[] }));
     const currentCredits = credRow.rows[0]?.credits ?? 0;
@@ -259,7 +260,8 @@ export function registerGoogleRoutes({ requireAuth, requireAdmin, hasDatabase, d
     const apiKey = await getGoogleApiKey();
     if (!apiKey) return res.status(503).json({ error: 'Google API not configured' });
 
-    const creditCost = cfg.credits;
+    // Veo bills per second (default clip 8 s): cost × 1.54 (server/aiPricing.ts).
+    const creditCost = creditsForUsd((GOOGLE_VIDEO_USD_PER_SEC[model] ?? 0.4) * Math.max(Number(duration) || 8, 4));
     const credRow = await pool.query<{ credits: number }>('SELECT credits FROM user_credits WHERE user_id=$1', [auth.userId])
       .catch(() => ({ rows: [] as { credits: number }[] }));
     const currentCredits = credRow.rows[0]?.credits ?? 0;

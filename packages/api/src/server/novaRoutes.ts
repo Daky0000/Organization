@@ -34,6 +34,9 @@ import {
   hasAICredits,
   callAINonStreaming,
   resolveGeminiModel,
+  freeFirst,
+  isPaidKey,
+  NVIDIA_FREE_ONLY,
 } from '../ai-helpers.ts';
 import { generationLimiter } from '../middleware/rateLimiter.ts';
 import { triggerAgentCompilation } from '../agent-helpers.ts';
@@ -734,6 +737,8 @@ If the user has no brand profile, return 1 proposal suggesting they complete the
         }
       }
       const model = aiCfg.model || FAST_MODEL;
+      // No paid key but the free NVIDIA models are on: agents still run, on those alone.
+      if (!apiKey && aiCfg.nvidiaReady) apiKey = NVIDIA_FREE_ONLY;
       return { provider, apiKey, model };
     } catch {
       return { provider: 'anthropic', apiKey: '', model: FAST_MODEL };
@@ -991,18 +996,14 @@ If the user has no brand profile, return 1 proposal suggesting they complete the
     let proposals: any[] = [];
     let rawMessages: unknown = [];
     try {
-      if (provider === 'google') {
-        const geminiModel = resolveGeminiModel(effectiveModel);
-        rawText = await callAINonStreaming(
-          'google',
-          effectiveKey,
-          geminiModel,
-          systemPrompt,
-          userMessage,
-          1200,
-          { userId, feature: `agent_${agentKey}` }
-        );
-      } else {
+      // Free NVIDIA agent ladder first (three models, one try each); the paid
+      // call below only when all three failed. The free models get the schema
+      // in words, since structured output is a Claude parameter.
+      const paidCall = !isPaidKey(effectiveKey) ? null : async (): Promise<string> => {
+        if (provider === 'google') {
+          return callAINonStreaming('google', effectiveKey, resolveGeminiModel(effectiveModel), systemPrompt, userMessage, 1200,
+            { userId, feature: `agent_${agentKey}`, skipFree: true });
+        }
         const client = new Anthropic({ apiKey: effectiveKey });
         try {
           const aiRes = await client.messages.create({
@@ -1017,19 +1018,16 @@ If the user has no brand profile, return 1 proposal suggesting they complete the
             inputTokens: aiRes.usage.input_tokens, outputTokens: aiRes.usage.output_tokens,
             cacheReadTokens: aiRes.usage.cache_read_input_tokens ?? 0,
           });
-          rawText = aiRes.content[0]?.type === 'text' ? aiRes.content[0].text : '';
+          return aiRes.content[0]?.type === 'text' ? aiRes.content[0].text : '';
         } catch (_structuredErr) {
-          rawText = await callAINonStreaming(
-            'anthropic',
-            effectiveKey,
-            effectiveModel,
-            systemPrompt,
-            userMessage,
-            1000,
-            { userId, feature: `agent_${agentKey}` }
-          );
+          return callAINonStreaming('anthropic', effectiveKey, effectiveModel, systemPrompt, userMessage, 1000,
+            { userId, feature: `agent_${agentKey}`, skipFree: true });
         }
-      }
+      };
+      rawText = await freeFirst({
+        system: `${systemPrompt}\n\nReply with one JSON object that matches this JSON Schema, and nothing else:\n${JSON.stringify(proposalsSchema)}`,
+        user: userMessage, maxTokens: 1200, job: 'agent', userId, feature: `agent_${agentKey}`,
+      }, paidCall);
 
       const block = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
       const candidate = block ? block[1] : rawText;
@@ -1298,11 +1296,11 @@ If the user has no brand profile, return 1 proposal suggesting they complete the
       if (agentRes.rows.length === 0) return res.status(404).json({ success: false, error: 'Agent not found' });
       const agent = agentRes.rows[0];
       await dbQuery(`UPDATE admin_agents SET status = 'running' WHERE key = $1`, [key]);
-      const { encryptedKey } = await getAIConfig();
+      const { encryptedKey, nvidiaReady } = await getAIConfig();
       const apiKey = (encryptedKey ? decryptAIKey(encryptedKey) : null) || process.env.ANTHROPIC_API_KEY || '';
-      if (!apiKey) {
+      if (!apiKey && !nvidiaReady) {
         await dbQuery(`UPDATE admin_agents SET status = 'error' WHERE key = $1`, [key]);
-        return res.status(503).json({ success: false, error: 'Anthropic API key not configured. Set it in Admin → AI Assistant → Configuration.' });
+        return res.status(503).json({ success: false, error: 'The AI assistant is temporarily unavailable. Please try again in a few minutes.' });
       }
       const snapshot = await gatherPlatformSnapshot(key);
       const actionsPrompt = buildActionsPrompt(key, agent.autonomy_config ?? {});
@@ -1335,14 +1333,20 @@ Respond ONLY with a JSON object in this exact format (no extra text):
 
 Only take actions when data clearly justifies them. If the platform is healthy, return an empty decisions array.`;
 
-      const client = new Anthropic({ apiKey });
-      const aiResponse = await client.messages.create({
-        model: agent.model || 'claude-sonnet-4-6',
-        max_tokens: 1500,
-        system: agent.system_prompt,
-        messages: [{ role: 'user', content: userMessage }],
-      });
-      const rawText = aiResponse.content[0]?.type === 'text' ? aiResponse.content[0].text : '';
+      // Free NVIDIA agent ladder first; Claude only when all three failed.
+      const rawText = await freeFirst(
+        { system: agent.system_prompt, user: userMessage, maxTokens: 1500, job: 'agent', userId: null, feature: `admin_agent_${key}` },
+        apiKey ? async () => {
+          const client = new Anthropic({ apiKey });
+          const aiResponse = await client.messages.create({
+            model: agent.model || 'claude-sonnet-4-6',
+            max_tokens: 1500,
+            system: agent.system_prompt,
+            messages: [{ role: 'user', content: userMessage }],
+          });
+          return aiResponse.content[0]?.type === 'text' ? aiResponse.content[0].text : '';
+        } : null,
+      );
       let parsed: { summary: string; health_score?: number; decisions: any[] } = { summary: rawText.slice(0, 600), decisions: [] };
       try {
         const block = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -1840,14 +1844,21 @@ ${teamState}` : ''}`;
         );
         return res.json({ success: true, reply });
       } else {
-        const client = new Anthropic({ apiKey });
-        const aiRes = await client.messages.create({
-          model: USER_AGENT_MODELS[key] ?? FAST_MODEL,
-          max_tokens: 600,
-          system: systemPrompt,
-          messages: messages.map((m) => ({ role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant', content: String(m.content).slice(0, 2000) })),
-        });
-        const reply = aiRes.content[0]?.type === 'text' ? aiRes.content[0].text : '';
+        // Free NVIDIA ladder first, Claude only when all three failed.
+        const conversationPrompt = messages.map(m => `${m.role === 'user' ? 'User' : agentName}: ${String(m.content).slice(0, 2000)}`).join('\n\n');
+        const reply = await freeFirst(
+          { system: systemPrompt, user: conversationPrompt, maxTokens: 600, job: 'agent', userId: auth.userId, feature: `agent_chat_${key}` },
+          isPaidKey(apiKey) ? async () => {
+            const client = new Anthropic({ apiKey });
+            const aiRes = await client.messages.create({
+              model: USER_AGENT_MODELS[key] ?? FAST_MODEL,
+              max_tokens: 600,
+              system: systemPrompt,
+              messages: messages.map((m) => ({ role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant', content: String(m.content).slice(0, 2000) })),
+            });
+            return aiRes.content[0]?.type === 'text' ? aiRes.content[0].text : '';
+          } : null,
+        );
         return res.json({ success: true, reply });
       }
     } catch (e: any) { return res.status(500).json({ success: false, error: e.message }); }
@@ -1899,13 +1910,18 @@ ${teamState}` : ''}`;
           if (provider === 'google') {
             raw = await callAINonStreaming('google', apiKey, resolveGeminiModel(model), 'You are an expert brand strategist. Return only pure JSON.', promptText, 700, { userId: auth.userId, feature: 'brand_voice_extract' });
           } else {
-            const client = new Anthropic({ apiKey });
-            const aiRes = await client.messages.create({
-              model: FAST_MODEL,
-              max_tokens: 700,
-              messages: [{ role: 'user', content: promptText }],
-            });
-            raw = aiRes.content[0]?.type === 'text' ? aiRes.content[0].text : '';
+            raw = await freeFirst(
+              { system: 'You are an expert brand strategist. Return only pure JSON.', user: promptText, maxTokens: 700, job: 'fast', userId: auth.userId, feature: 'brand_voice_extract' },
+              isPaidKey(apiKey) ? async () => {
+                const client = new Anthropic({ apiKey });
+                const aiRes = await client.messages.create({
+                  model: FAST_MODEL,
+                  max_tokens: 700,
+                  messages: [{ role: 'user', content: promptText }],
+                });
+                return aiRes.content[0]?.type === 'text' ? aiRes.content[0].text : '';
+              } : null,
+            );
           }
           const match = raw.match(/\{[\s\S]*\}/);
           if (match) voice = JSON.parse(match[0]);
@@ -1978,20 +1994,25 @@ ${teamState}` : ''}`;
 
       const aiCfg = await getAIConfig();
       const apiKey = resolveActiveKey(aiCfg);
-      if (!apiKey) { send({ type: 'error', message: 'AI not configured — add an API key in Admin → AI Assistant.' }); send({ type: 'done' }); return res.end(); }
-      const anthropic = new Anthropic({ apiKey });
+      if (!apiKey && !aiCfg.nvidiaReady) { send({ type: 'error', message: 'The AI assistant is temporarily unavailable. Please try again in a few minutes.' }); send({ type: 'done' }); return res.end(); }
+      // Each text step: free NVIDIA ladder first, the paid model only when all three failed.
+      const askStep = (prompt: string, maxTokens: number, feature: string) => freeFirst(
+        { system: 'You are Nova, the creative director on a marketing team.', user: prompt, maxTokens, job: 'text', userId: auth.userId, feature },
+        !apiKey ? null : aiCfg.provider === 'google'
+          ? () => callAINonStreaming('google', apiKey, resolveGeminiModel(aiCfg.model), 'You are Nova, the creative director on a marketing team.', prompt, maxTokens, { userId: auth.userId, feature, skipFree: true })
+          : async () => {
+            const r = await new Anthropic({ apiKey }).messages.create({ model: FAST_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] });
+            return r.content[0]?.type === 'text' ? r.content[0].text : '';
+          },
+      );
       const stepResults: Record<string, any> = {};
 
       for (const step of steps) {
         send({ type: 'step_start', step_id: step.id, name: step.name, tool: step.tool });
         try {
           if (step.tool === 'meigen_search') {
-            const searchRes = await anthropic.messages.create({
-              model: FAST_MODEL, max_tokens: 1500,
-              messages: [{ role: 'user', content: `You are a design research AI. Generate 4 realistic design concepts as if retrieved from a design AI library.\n\nRequest: "${description || 'professional brand design'}"\nBrand niche: ${brandNiche}\n\nReturn ONLY valid JSON array (no markdown, no text outside the array):\n[\n  {\n    "title": "short descriptive name",\n    "style": "visual style description",\n    "colors": "main colors used",\n    "prompt": "detailed image generation prompt that would create this design",\n    "model": "one of: flux-2-turbo | flux-kontext-pro | seedream-v5-lite | mystic",\n    "thumbnail_description": "brief visual description for display"\n  }\n]` }],
-            });
+            const rawContent = await askStep(`You are a design research AI. Generate 4 realistic design concepts as if retrieved from a design AI library.\n\nRequest: "${description || 'professional brand design'}"\nBrand niche: ${brandNiche}\n\nReturn ONLY valid JSON array (no markdown, no text outside the array):\n[\n  {\n    "title": "short descriptive name",\n    "style": "visual style description",\n    "colors": "main colors used",\n    "prompt": "detailed image generation prompt that would create this design",\n    "model": "one of: flux-2-turbo | flux-kontext-pro | seedream-v5-lite | mystic",\n    "thumbnail_description": "brief visual description for display"\n  }\n]`, 1500, 'nova_design_search');
             let designs: any[] = [];
-            const rawContent = searchRes.content[0].type === 'text' ? searchRes.content[0].text : '';
             try { const arrMatch = rawContent.match(/\[[\s\S]*\]/); if (arrMatch) designs = JSON.parse(arrMatch[0]); } catch (_err) { designs = []; }
             stepResults[step.id] = { designs };
             send({ type: 'step_done', step_id: step.id });
@@ -2004,8 +2025,7 @@ ${teamState}` : ''}`;
               .replace('{step_search.result}', JSON.stringify(stepResults['step_search']?.designs ?? []))
               .replace('{step_extract.result}', stepResults['step_extract']?.result ?? '');
             if (brandSummary) prompt += `\n\nUSER BRAND MEMORY:\n${brandSummary}`;
-            const synthRes = await anthropic.messages.create({ model: FAST_MODEL, max_tokens: 1200, messages: [{ role: 'user', content: prompt }] });
-            const result = synthRes.content[0].type === 'text' ? synthRes.content[0].text : '';
+            const result = await askStep(prompt, 1200, 'nova_design_synthesis');
             stepResults[step.id] = { result };
             send({ type: 'step_done', step_id: step.id });
 
@@ -2230,8 +2250,7 @@ ${teamState}` : ''}`;
               prompt = prompt.replace(`{${k}.result}`, r);
             }
             if (brandSummary) prompt += `\n\nUSER BRAND MEMORY:\n${brandSummary}`;
-            const draftRes = await anthropic.messages.create({ model: FAST_MODEL, max_tokens: 2000, messages: [{ role: 'user', content: prompt }] });
-            const result = draftRes.content[0].type === 'text' ? draftRes.content[0].text : '';
+            const result = await askStep(prompt, 2000, `nova_${step.tool}`);
             stepResults[step.id] = { result };
             send({ type: 'step_done', step_id: step.id });
 

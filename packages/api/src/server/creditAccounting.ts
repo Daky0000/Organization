@@ -52,7 +52,26 @@ export async function addPurchase(client: PoolClient, order: { reference: string
 }
 export async function spend(pool: Pool, userId: string, quantity: number, reason: string, meta: Record<string, unknown> = {}, mode: CreditMode = 'live') {
   if (!Number.isSafeInteger(quantity) || quantity < 1) throw new CreditError('Invalid credit quantity');
-  return transaction(pool,async client => {
+  return transaction(pool,client => debitWithinTransaction(client,userId,quantity,reason,meta,mode));
+}
+// Holds credits against a running job without debiting them: reserved_credits
+// stops the same balance being spent twice. The caller owns the transaction.
+export async function holdCredits(client: PoolClient, userId: string, quantity: number, mode: CreditMode = 'live', allowance = 0) {
+  if (!Number.isSafeInteger(quantity) || quantity < 0) throw new CreditError('Invalid credit quantity');
+  const row = await lockWallet(client,userId,mode,allowance);
+  if (row.spending_blocked) throw new CreditError('Credit account needs administrator review',403);
+  if (Number(row.credits)-Number(row.reserved_credits)<quantity) throw new CreditError('Insufficient AI credits',402);
+  if (quantity) await client.query(`UPDATE ${walletTable(mode)} SET reserved_credits=reserved_credits+$2 WHERE user_id=$1`,[userId,quantity]);
+  return Number(row.credits)-Number(row.reserved_credits)-quantity;
+}
+export async function releaseHeldCredits(client: PoolClient, userId: string, quantity: number, mode: CreditMode = 'live') {
+  if (!Number.isSafeInteger(quantity) || quantity < 1) return;
+  await lockWallet(client,userId,mode);
+  await client.query(`UPDATE ${walletTable(mode)} SET reserved_credits=GREATEST(0,reserved_credits-$2) WHERE user_id=$1`,[userId,quantity]);
+}
+export async function debitWithinTransaction(client: PoolClient, userId: string, quantity: number, reason: string, meta: Record<string, unknown> = {}, mode: CreditMode = 'live') {
+  if (!Number.isSafeInteger(quantity) || quantity < 1) throw new CreditError('Invalid credit quantity');
+  {
     const row = await lockWallet(client,userId,mode);
     if (row.spending_blocked) throw new CreditError('Credit account needs administrator review',403);
     if (Number(row.credits)-Number(row.reserved_credits)<quantity) throw new CreditError('Insufficient AI credits',402);
@@ -72,7 +91,7 @@ export async function spend(pool: Pool, userId: string, quantity: number, reason
     await client.query(`UPDATE ${walletTable(mode)} SET credits=credits-$2,purchased_credits=purchased_credits-$3 WHERE user_id=$1`,[userId,quantity,originalDebit]);
     await enqueueRecharge(client,userId,mode,Number(row.credits)-quantity-Number(row.reserved_credits));
     return Number(row.credits)-quantity-Number(row.reserved_credits);
-  });
+  }
 }
 export async function enqueueRecharge(client: PoolClient, userId: string, mode: CreditMode, balance: number) {
   await client.query(`INSERT INTO credit_recharge_jobs(id,user_id,mode)

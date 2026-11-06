@@ -418,6 +418,8 @@ export interface ContentStrategyRecord {
 }
 
 export interface CreativeControls {
+  /** Which model wins when none is requested: the lowest-cost one (default) or the best-quality one. */
+  cost_mode?: 'economy' | 'quality';
   logo_policy: LogoPolicy;
   text_in_image: TextInImagePolicy;
   reference_fidelity: ReferenceFidelity;
@@ -430,6 +432,8 @@ export interface CreativeControls {
   background_complexity: 'clean_solid' | 'minimal_studio' | 'contextual' | 'rich_editorial';
   confirmation_threshold_usd: number;
   user_confirmed_spend?: boolean;
+  /** A model the user picked explicitly (registry ID). Validated on every run, never substituted. */
+  requested_model_id?: string | null;
 }
 
 export interface CreativeBriefRecord {
@@ -504,6 +508,7 @@ export interface VideoStoryboardScene {
   caption_text: string;
   source_type: 'real_screen_recording' | 'customer_footage' | 'founder_footage' | 'licensed_stock' | 'ai_generated';
   asset_url?: string;
+  asset_id?: string;
   status?: 'pending' | 'draft_ready' | 'passed' | 'failed';
   evaluation_notes?: string;
 }
@@ -523,7 +528,8 @@ export interface ContentItemRecord {
   content_hash?: string;
   approved_content_hash?: string | null;
   approved_destination?: string | null;
-  execution_mode?: 'live_provider' | 'sandbox_fallback';
+  /** sandbox_fallback is a legacy value; new rows use sandbox_demo, which can never publish. */
+  execution_mode?: 'live_provider' | 'sandbox_demo' | 'sandbox_fallback' | 'pending';
   pillar_id: string;
   pillar_name: string;
   funnel_stage: string;
@@ -538,7 +544,22 @@ export interface ContentItemRecord {
   approval_required: boolean;
   risk_flags: string[];
   validation_report: ValidationReport | Record<string, any>;
-  media_assets: Array<{ url: string; type: 'image' | 'video'; alt_text?: string; width?: number; height?: number; provenance?: string }>;
+  /**
+   * asset_id is the source of truth; url is derived per response (signed,
+   * short-lived) and is never persisted for generated media.
+   */
+  media_assets: Array<{
+    url: string;
+    type: 'image' | 'video';
+    asset_id?: string;
+    mime_type?: string;
+    is_demo?: boolean;
+    role?: 'primary' | 'slide' | 'scene_clip';
+    alt_text?: string;
+    width?: number;
+    height?: number;
+    provenance?: string;
+  }>;
   deterministic_overlay: Record<string, any>;
   slides: CarouselSlideSpec[];
   storyboard: VideoStoryboardScene[];
@@ -573,7 +594,7 @@ export interface WorkflowRunRecord {
   tenant_id: string;
   content_item_id: string;
   workflow_type: WorkflowType;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'reconciliation_required';
   parameters: Record<string, any>;
   node_executions: WorkflowNodeExecution[];
   estimated_provider_cost_usd: number;
@@ -588,6 +609,17 @@ export interface WorkflowRunRecord {
   completed_at: string | null;
 }
 
+/**
+ * scheduled → claimed → submitting → remote_processing → published, with
+ * retry_wait, publish_failed, reconciliation_required, cancelled and paused.
+ * 'pending' and 'publishing' are legacy values still readable from old rows.
+ */
+export const PUBLICATION_STATUSES = [
+  'pending', 'scheduled', 'claimed', 'submitting', 'remote_processing', 'publishing', 'published',
+  'retry_wait', 'publish_failed', 'reconciliation_required', 'cancelled', 'paused',
+] as const;
+export type PublicationStatus = (typeof PUBLICATION_STATUSES)[number];
+
 export interface PublicationRecord {
   id: string;
   tenant_id: string;
@@ -598,7 +630,7 @@ export interface PublicationRecord {
   slot_name: string;
   timezone: string;
   scheduled_at: string | null;
-  status: 'pending' | 'scheduled' | 'publishing' | 'published' | 'publish_failed' | 'cancelled';
+  status: PublicationStatus;
   remote_post_id: string | null;
   error_message: string | null;
   retryable: boolean;
@@ -606,6 +638,19 @@ export interface PublicationRecord {
   approved_revision_hash?: string | null;
   provider_response?: Record<string, any> | null;
   paused?: boolean;
+  /** The user whose connected account publishes; revalidated before every submission. */
+  acting_user_id?: string | null;
+  publish_idempotency_key?: string | null;
+  attempt_count?: number;
+  next_attempt_at?: string | null;
+  lease_owner?: string | null;
+  lease_expires_at?: string | null;
+  provider_container_id?: string | null;
+  permalink?: string | null;
+  error_code?: string | null;
+  submitted_at?: string | null;
+  processing_started_at?: string | null;
+  version?: number;
   published_at: string | null;
   created_at: string;
   updated_at: string;
