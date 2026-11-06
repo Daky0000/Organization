@@ -12,7 +12,6 @@ import {
   SlidersHorizontal,
   Users,
   Waypoints,
-  DollarSign,
   Image,
   Zap,
   Globe,
@@ -26,7 +25,6 @@ import { Loading } from '../components/ui';
 
 const AdminOverview = lazy(() => import('../components/admin/AdminOverview'));
 const UserManagementPage = lazy(() => import('../components/admin/UserManagementPage'));
-const PricingManagement = lazy(() => import('../components/admin/PricingManagement'));
 const AdminCardsManagement = lazy(() => import('../components/admin/AdminCardsManagement'));
 const AdminAuthProviders = lazy(() => import('../components/admin/AdminAuthProviders'));
 const AdminPagesManagement = lazy(() => import('../components/admin/AdminPagesManagement'));
@@ -56,7 +54,6 @@ const Admin = ({ currentUser }: AdminProps) => {
   type AdminTab =
     | 'overview'
     | 'users'
-    | 'pricing'
     | 'cards'
     | 'auth-providers'
     | 'integrations'
@@ -65,7 +62,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     | 'nav-settings'
     | 'pages-home'
     | 'pages-tools'
-    | 'pages-pricing-public'
     | 'pages-login'
     | 'pages-privacy'
     | 'pages-terms'
@@ -86,7 +82,6 @@ const Admin = ({ currentUser }: AdminProps) => {
   const TAB_PATHS: Record<AdminTab, string> = {
     overview: '/admin/overview',
     users: '/admin/users',
-    pricing: '/admin/pricing',
     cards: '/admin/cards',
     'auth-providers': '/admin/auth-providers',
     integrations: '/admin/integrations',
@@ -95,7 +90,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     'nav-settings': '/admin/nav-settings',
     'pages-home': '/admin/pages/home',
     'pages-tools': '/admin/pages/tools',
-    'pages-pricing-public': '/admin/pages/pricing',
     'pages-login': '/admin/pages/login',
     'pages-privacy': '/admin/pages/privacy',
     'pages-terms': '/admin/pages/terms',
@@ -117,7 +111,6 @@ const Admin = ({ currentUser }: AdminProps) => {
   const TAB_LABELS: Record<AdminTab, string> = {
     overview: 'Overview',
     users: 'User Management',
-    pricing: 'Pricing Plans',
     cards: 'Card Templates',
     'auth-providers': 'Login Providers',
     integrations: 'Integrations',
@@ -126,7 +119,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     'nav-settings': 'Navigation',
     'pages-home': 'Homepage CMS',
     'pages-tools': 'Tools Page CMS',
-    'pages-pricing-public': 'Pricing Page CMS',
     'pages-login': 'Login / Signup CMS',
     'pages-privacy': 'Privacy Policy CMS',
     'pages-terms': 'Terms of Service CMS',
@@ -188,7 +180,6 @@ const Admin = ({ currentUser }: AdminProps) => {
   const adminItems = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, active: true },
     { id: 'users', label: 'User Management', icon: Users, active: true, tourId: 'admin-tab-users' },
-    { id: 'pricing', label: 'Pricing Plans', icon: DollarSign, active: true },
     { id: 'cards', label: 'Card Templates', icon: Image, active: true },
     { id: 'auth-providers', label: 'Login Providers', icon: KeyRound, active: true },
     { id: 'integrations', label: 'Integrations', icon: Waypoints, active: true },
@@ -202,7 +193,6 @@ const Admin = ({ currentUser }: AdminProps) => {
   const pagesItems: { id: AdminTab; label: string }[] = [
     { id: 'pages-home', label: 'Homepage' },
     { id: 'pages-tools', label: 'Tools' },
-    { id: 'pages-pricing-public', label: 'Pricing Page' },
     { id: 'pages-login', label: 'Login / Signup' },
     { id: 'pages-privacy', label: 'Privacy Policy' },
     { id: 'pages-terms', label: 'Terms of Service' },
@@ -524,7 +514,6 @@ const Admin = ({ currentUser }: AdminProps) => {
             >
               {activeTab === 'overview' && <AdminOverview />}
               {activeTab === 'users' && <UserManagementPage currentAdminRole={currentAdminRole} />}
-              {activeTab === 'pricing' && <PricingManagement />}
               {activeTab === 'cards' && <AdminCardsManagement />}
               {activeTab === 'auth-providers' && <AdminAuthProviders />}
               {activeTab === 'integrations' && <AdminIntegrations />}
