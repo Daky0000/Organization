@@ -115,3 +115,6 @@ packages/**/.env.*.local
 /SYSTEM_OVERVIEW.docx
 
 files/
+
+# Personal Claude Code settings
+.claude/settings.local.json
