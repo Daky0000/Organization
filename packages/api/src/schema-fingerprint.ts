@@ -1,5 +1,5 @@
 // Generated from the migration source. Regenerate before build or development.
-export const SCHEMA_SOURCE_HASH = '981d83850bb530048235637a0ae0577e465dd63e30b707effff3a54a860970ca';
+export const SCHEMA_SOURCE_HASH = 'b67b62cc75cf122ae6635c603738f7ee0802561e4b2aa4e63c465e6d13afe62e';
 export const REQUIRED_SCHEMA_TABLES = [
   "account_metrics",
   "admin_agent_runs",
@@ -16,6 +16,9 @@ export const REQUIRED_SCHEMA_TABLES = [
   "agent_templates",
   "agent_tools",
   "agent_workflows",
+  "ai_call_traces",
+  "ai_eval_runs",
+  "ai_response_cache",
   "ai_skills",
   "ai_usage_log",
   "api_keys",
@@ -89,6 +92,7 @@ export const REQUIRED_SCHEMA_TABLES = [
   "funnel_events",
   "funnel_steps",
   "funnels",
+  "generation_checkpoints",
   "gmail_messages",
   "gmail_sync_state",
   "google_generations",
@@ -192,6 +196,7 @@ export const REQUIRED_SCHEMA_TABLES = [
   "user_agent_tasks",
   "user_agents",
   "user_credits",
+  "user_custom_instructions",
   "user_designs",
   "user_integrations",
   "user_memories",

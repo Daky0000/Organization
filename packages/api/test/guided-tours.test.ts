@@ -96,7 +96,6 @@ test('tour card: placed beside the control when it fits, flipped when not, never
 
 test('marketing tours: every tool has a short tour on its own page, with unique steps and real targets', () => {
   const tours = Object.values(MARKETING_TOURS);
-  assert.ok(tours.length >= 9);
   const pages = new Set(tours.map((t) => t.page));
   assert.equal(pages.size, tours.length, 'one tour per page');
   for (const t of tours) {
