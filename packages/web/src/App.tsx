@@ -3,27 +3,22 @@ import {
   AlertCircle,
   BarChart4,
   Bell,
-  Bot,
   Building2,
   ChevronDown,
   Compass,
   PhoneCall,
-  CreditCard,
   HelpCircle,
-  Layers,
   LogOut,
   Megaphone,
   Plus,
   Rocket,
   Shield,
   Sparkles,
-  Star,
   User,
   Waypoints,
   Settings,
 } from 'lucide-react';
 import NotificationBell from './components/NotificationBell';
-import CreditBadge from './components/CreditBadge';
 import OnboardingWizard from './components/OnboardingWizard';
 import { onboardingService } from './services/onboardingService';
 import PageTour, { PAGE_GUIDES } from './components/PageTour';
@@ -63,34 +58,16 @@ const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const VerifyEmail = lazy(() => import('./pages/VerifyEmail'));
 const PostAutomation = lazy(() => import('./pages/PostAutomation'));
 const MarketingOverview = lazy(() => import('./pages/MarketingOverview'));
-const MarketingContacts = lazy(() => import('./pages/MarketingContacts'));
-const MarketingEmail = lazy(() => import('./pages/MarketingEmail'));
-const MarketingCampaigns = lazy(() => import('./pages/MarketingCampaigns'));
-const MarketingSurveys = lazy(() => import('./pages/MarketingSurveys'));
-const MarketingAutomations = lazy(() => import('./pages/MarketingAutomations'));
-const MarketingForms = lazy(() => import('./pages/MarketingForms'));
-const MarketingLeads = lazy(() => import('./pages/MarketingLeads'));
-const MarketingLeadsImport = lazy(() => import('./pages/MarketingLeadsImport'));
 const SalesLeads = lazy(() => import('./pages/SalesLeads'));
 const SalesConversations = lazy(() => import('./pages/SalesConversations'));
 const SalesFollowUps = lazy(() => import('./pages/SalesFollowUps'));
 const SalesIntelligence = lazy(() => import('./pages/SalesIntelligence'));
 const SalesSettings = lazy(() => import('./pages/SalesSettings'));
 const CRMCompanies = lazy(() => import('./pages/CRMCompanies'));
-const CRMPipeline = lazy(() => import('./pages/CRMPipeline'));
-const CRMLeadScoring = lazy(() => import('./pages/CRMLeadScoring'));
-const GmailAgent = lazy(() => import('./pages/GmailAgent'));
-const ConnectorHub = lazy(() => import('./pages/ConnectorHub'));
-const ConnectorProviderSetup = lazy(() => import('./pages/ConnectorProviderSetup'));
-const ConnectorSyncDashboard = lazy(() => import('./pages/ConnectorSyncDashboard'));
-const PublicSurvey = lazy(() => import('./pages/PublicSurvey'));
 const Workspace = lazy(() => import('./pages/Workspace'));
 const AcceptInvite = lazy(() => import('./pages/AcceptInvite'));
-const Billing = lazy(() => import('./pages/Billing'));
-const Credits = lazy(() => import('./pages/Credits'));
 const Memory = lazy(() => import('./pages/Memory'));
 const Changelog = lazy(() => import('./pages/Changelog'));
-const AITeam = lazy(() => import('./pages/AITeam'));
 const Discover = lazy(() => import('./pages/Discover'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const TasksPage = lazy(() => import('./components/tasks/TasksPage'));
@@ -130,36 +107,19 @@ export type PageType =
   | 'memory'
   | 'integrations'
   | 'marketing'
-  | 'marketing-contacts'
-  | 'marketing-email'
-  | 'marketing-campaigns'
-  | 'marketing-surveys'
-  | 'marketing-automations'
-  | 'marketing-forms'
-  | 'marketing-leads'
-  | 'marketing-leads-import'
   | 'sales-leads'
   | 'sales-conversations'
   | 'sales-followups'
   | 'sales-intelligence'
   | 'sales-settings'
   | 'crm-companies'
-  | 'crm-pipeline'
-  | 'crm-scoring'
-  | 'gmail-agent'
-  | 'connector-hub'
-  | 'connector-setup'
-  | 'connector-sync'
   | 'workspace'
-  | 'credits'
-  | 'billing'
   | 'pricing'
   | 'tasks'
   | 'project-settings'
   | 'settings'
   | 'workflow'
   | 'discover'
-  | 'ai-team'
   | 'social-inbox';
 
 type AuthMeResponse = {
@@ -189,35 +149,18 @@ const PAGE_PATHS: Record<PageType, string> = {
   memory: '/memory',
   integrations: '/integrations',
   marketing: '/marketing',
-  'marketing-contacts': '/marketing/contacts',
-  'marketing-email': '/marketing/email',
-  'marketing-campaigns': '/marketing/campaigns',
-  'marketing-surveys': '/marketing/surveys',
-  'marketing-automations': '/marketing/automations',
-  'marketing-forms': '/marketing/forms',
-  'marketing-leads': '/marketing/leads',
-  'marketing-leads-import': '/marketing/leads/import',
   'sales-leads': '/sales/leads',
   'sales-conversations': '/sales/conversations',
   'sales-followups': '/sales/followups',
   'sales-intelligence': '/sales/intelligence',
   'sales-settings': '/sales/settings',
   'crm-companies': '/crm/companies',
-  'crm-pipeline': '/crm/pipeline',
-  'crm-scoring': '/crm/scoring',
-  'gmail-agent': '/crm/gmail-agent',
-  'connector-hub': '/connectors',
-  'connector-setup': '/connectors/setup',
-  'connector-sync': '/connectors/sync',
   workspace: '/workspace',
-  credits: '/credits',
-  billing: '/billing',
   tasks: '/tasks',
   'project-settings': '/project/settings',
   settings: '/settings',
   workflow: '/posts/workflow',
   discover: '/discover',
-  'ai-team': '/ai-team',
   'social-inbox': '/social-inbox',
 };
 
@@ -235,35 +178,18 @@ const PAGE_TITLES: Record<PageType, string> = {
   memory: 'Brand Memory',
   integrations: 'Integrations',
   marketing: 'Marketing Overview',
-  'marketing-contacts': 'Contacts & Segments',
-  'marketing-email': 'Email Campaigns',
-  'marketing-campaigns': 'Campaigns & Funnels',
-  'marketing-surveys': 'Surveys',
-  'marketing-automations': 'Marketing Automations',
-  'marketing-forms': 'Lead Forms',
-  'marketing-leads': 'Lead Generation',
-  'marketing-leads-import': 'Import Leads',
   'sales-leads': 'Sales Leads',
   'sales-conversations': 'Sales Conversations',
   'sales-followups': 'Follow-ups',
   'sales-intelligence': 'Sales Intelligence',
   'sales-settings': 'Sales Settings',
   'crm-companies': 'Companies',
-  'crm-pipeline': 'Deals Pipeline',
-  'crm-scoring': 'Lead Scoring',
-  'gmail-agent': 'Gmail Agent',
-  'connector-hub': 'Connector Hub',
-  'connector-setup': 'Connector Setup',
-  'connector-sync': 'Sync Dashboard',
   workspace: 'Workspace & Team',
-  credits: 'AI Credits',
-  billing: 'Billing & Subscription',
   tasks: 'Project Tasks',
   'project-settings': 'Project Settings',
   settings: 'Settings & API',
   workflow: 'Workflow Builder',
   discover: 'Discover Library',
-  'ai-team': 'Workforce Floor',
   'social-inbox': 'Unified Social Inbox',
 };
 
@@ -271,28 +197,16 @@ const PATH_TO_PAGE = new Map<string, PageType>(
   Object.entries(PAGE_PATHS).map(([page, path]) => [path, page as PageType])
 );
 PATH_TO_PAGE.set('/admin', 'admin');
-PATH_TO_PAGE.set('/mailing', 'marketing-email');
-PATH_TO_PAGE.set('/campaign', 'marketing-campaigns');
 
 // Sidebar groups
 const CONTENT_PAGES: PageType[] = ['posts', 'post-automation', 'media', 'cards', 'workflow', 'analytics'];
 const MARKETING_PAGES: PageType[] = [
   'marketing',
   ...CONTENT_PAGES,
-  'marketing-contacts',
-  'marketing-email',
-  'marketing-campaigns',
-  'marketing-surveys',
-  'marketing-automations',
-  'marketing-forms',
-  'marketing-leads',
-  'marketing-leads-import',
 ];
-const CRM_PAGES: PageType[] = ['crm-companies', 'crm-pipeline', 'crm-scoring', 'gmail-agent'];
 const SALES_PAGES: PageType[] = [
   'sales-leads', 'sales-conversations', 'sales-followups', 'sales-intelligence', 'sales-settings',
 ];
-const CONNECTOR_PAGES: PageType[] = ['connector-hub', 'connector-setup', 'connector-sync'];
 
 async function fetchCurrentUser(token: string): Promise<AppUser | null> {
   try {
@@ -340,12 +254,8 @@ type AppSidebarProps = {
   setPostsMenuOpen: React.Dispatch<React.SetStateAction<boolean>>;
   marketingMenuOpen: boolean;
   setMarketingMenuOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  crmMenuOpen: boolean;
-  setCrmMenuOpen: React.Dispatch<React.SetStateAction<boolean>>;
   salesMenuOpen: boolean;
   setSalesMenuOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  connectorMenuOpen: boolean;
-  setConnectorMenuOpen: React.Dispatch<React.SetStateAction<boolean>>;
   profileNeedsAttention: boolean;
   navigateToPage: (page: PageType, replace?: boolean) => void;
   handleLogout: () => void;
@@ -362,12 +272,8 @@ function AppSidebar({
   setPostsMenuOpen,
   marketingMenuOpen,
   setMarketingMenuOpen,
-  crmMenuOpen,
-  setCrmMenuOpen,
   salesMenuOpen,
   setSalesMenuOpen,
-  connectorMenuOpen,
-  setConnectorMenuOpen,
   profileNeedsAttention,
   navigateToPage,
   handleLogout,
@@ -483,7 +389,6 @@ function AppSidebar({
   const displayName = currentOrg?.name ?? authUser?.name ?? 'My Workspace';
   const userInitial = displayName.slice(0, 2).toUpperCase();
   const planLabel = authUser?.planName?.trim() || 'Free';
-  const isFreePlan = planLabel.toLowerCase() === 'free';
 
   const q = navSearch.trim().toLowerCase();
   const matches = (label: string) => !q || label.toLowerCase().includes(q);
@@ -531,12 +436,6 @@ function AppSidebar({
             <button type="button" onClick={() => go('notifications')} className={cls(currentPage === 'notifications')}>
               <Bell size={15} className="shrink-0 opacity-75" />
               <span className="flex-1 text-left">Notifications</span>
-            </button>
-          )}
-          {navOn('ai-team') && matches('AI Team Workforce') && (
-            <button type="button" onClick={() => go('ai-team')} className={cls(currentPage === 'ai-team')}>
-              <Bot size={15} className="shrink-0 opacity-75" />
-              <span className="flex-1 text-left">AI Team</span>
             </button>
           )}
           {navOn('social-inbox') && matches('Social Inbox Approvals') && (
@@ -705,59 +604,11 @@ function AppSidebar({
           <h2>Operations &amp; Growth</h2>
 
           {/* CRM */}
-          {navOn('crm') && (
-            <>
-              <div
-                className={cls(
-                  currentPage === 'crm-companies' ||
-                    currentPage === 'crm-pipeline' ||
-                    currentPage === 'crm-scoring' ||
-                    currentPage === 'gmail-agent'
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCrmMenuOpen(true);
-                    go('crm-pipeline');
-                  }}
-                  className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-                >
-                  <Building2 size={15} className="shrink-0 opacity-75" />
-                  <span className="flex-1 text-left">CRM</span>
-                </button>
-                <button
-                  type="button"
-                  aria-label="Toggle Crm submenu"
-                  aria-expanded={crmMenuOpen}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setCrmMenuOpen((p) => !p);
-                  }}
-                  className="shrink-0 -m-1 p-1 rounded-[8px] hover:bg-sunken"
-                >
-                  <ChevronDown size={12} className={`text-faint transition-transform ${crmMenuOpen || Boolean(q) ? 'rotate-180' : ''}`} />
-                </button>
-              </div>
-              {(crmMenuOpen || Boolean(q)) && (
-                <div className="ml-4 border-l border-line pl-2.5 py-0.5 flex flex-col">
-                  {(
-                    [
-                      { id: 'crm-companies' as PageType, label: 'Companies', navKey: 'crm-companies' },
-                      { id: 'crm-pipeline' as PageType, label: 'Deals', navKey: 'crm-pipeline' },
-                      { id: 'crm-scoring' as PageType, label: 'Lead Scoring', navKey: 'crm-scoring' },
-                      { id: 'gmail-agent' as PageType, label: 'Gmail Agent', navKey: 'crm-gmail-agent' },
-                    ] as { id: PageType; label: string; navKey: string }[]
-                  )
-                    .filter((c) => navOn(c.navKey) && matches(`CRM ${c.label}`))
-                    .map((c) => (
-                      <button key={c.id} type="button" onClick={() => go(c.id)} className={subCls(currentPage === c.id)}>
-                        {c.label}
-                      </button>
-                    ))}
-                </div>
-              )}
-            </>
+          {navOn('crm-companies') && matches('CRM Companies') && (
+            <button type="button" onClick={() => go('crm-companies')} className={cls(currentPage === 'crm-companies')}>
+              <Building2 size={15} className="shrink-0 opacity-75" />
+              <span className="flex-1 text-left">Companies</span>
+            </button>
           )}
 
           {/* Sales */}
@@ -899,25 +750,6 @@ function AppSidebar({
                       )}
                     </>
                   )}
-
-                  {(
-                    [
-                      { id: 'marketing-contacts' as PageType, label: 'Contacts', navKey: 'marketing-contacts' },
-                      { id: 'marketing-email' as PageType, label: 'Email', navKey: 'marketing-email' },
-                      { id: 'marketing-campaigns' as PageType, label: 'Campaigns', navKey: 'marketing-campaigns' },
-                      { id: 'marketing-surveys' as PageType, label: 'Surveys', navKey: 'marketing-surveys' },
-                      { id: 'marketing-automations' as PageType, label: 'Automations', navKey: 'marketing-automations' },
-                      { id: 'marketing-forms' as PageType, label: 'Forms', navKey: 'marketing-forms' },
-                      { id: 'marketing-leads' as PageType, label: 'Lead Generation', navKey: 'marketing-leads' },
-                      { id: 'marketing-leads-import' as PageType, label: 'Import Leads', navKey: 'marketing-leads-import' },
-                    ] as { id: PageType; label: string; navKey: string }[]
-                  )
-                    .filter((c) => navOn(c.navKey) && matches(`Marketing ${c.label}`))
-                    .map((c) => (
-                      <button key={c.id} type="button" onClick={() => go(c.id)} className={subCls(currentPage === c.id)}>
-                        {c.label}
-                      </button>
-                    ))}
                 </div>
               )}
             </div>
@@ -929,76 +761,11 @@ function AppSidebar({
               <span className="flex-1 text-left">Integrations</span>
             </button>
           )}
-
-          {/* Connectors */}
-          {navOn('connectors') && (
-            <>
-              <div
-                className={cls(
-                  currentPage === 'connector-hub' ||
-                    currentPage === 'connector-setup' ||
-                    currentPage === 'connector-sync'
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConnectorMenuOpen(true);
-                    go('connector-hub');
-                  }}
-                  className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-                >
-                  <Layers size={15} className="shrink-0 opacity-75" />
-                  <span className="flex-1 text-left">Connectors</span>
-                </button>
-                <button
-                  type="button"
-                  aria-label="Toggle Connector submenu"
-                  aria-expanded={connectorMenuOpen}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setConnectorMenuOpen((p) => !p);
-                  }}
-                  className="shrink-0 -m-1 p-1 rounded-[8px] hover:bg-sunken"
-                >
-                  <ChevronDown size={12} className={`text-faint transition-transform ${connectorMenuOpen || Boolean(q) ? 'rotate-180' : ''}`} />
-                </button>
-              </div>
-              {(connectorMenuOpen || Boolean(q)) && (
-                <div className="ml-4 border-l border-line pl-2.5 py-0.5 flex flex-col">
-                  {(
-                    [
-                      { id: 'connector-hub' as PageType, label: 'Hub', navKey: 'connectors-hub' },
-                      { id: 'connector-sync' as PageType, label: 'Sync Dashboard', navKey: 'connectors-sync' },
-                    ] as { id: PageType; label: string; navKey: string }[]
-                  )
-                    .filter((c) => navOn(c.navKey) && matches(`Connectors ${c.label}`))
-                    .map((c) => (
-                      <button key={c.id} type="button" onClick={() => go(c.id)} className={subCls(currentPage === c.id)}>
-                        {c.label}
-                      </button>
-                    ))}
-                </div>
-              )}
-            </>
-          )}
         </section>
 
         {/* ── Account & System Section ── */}
         <section className="os-nav-section">
-          <h2>System &amp; Billing</h2>
-          {matches('Buy credits') && (
-            <button type="button" onClick={() => go('credits')} className={cls(currentPage === 'credits')}>
-              <CreditCard size={15} className="shrink-0 opacity-75" />
-              <span className="flex-1 text-left">Buy credits</span>
-            </button>
-          )}
-          {navOn('billing') && matches('Billing') && (
-            <button type="button" data-tour-id="nav-billing" onClick={() => go('billing')} className={cls(currentPage === 'billing')}>
-              <CreditCard size={15} className="shrink-0 opacity-75" />
-              <span className="flex-1 text-left">Billing</span>
-            </button>
-          )}
+          <h2>System</h2>
           {authUser?.role === 'admin' && matches('Admin Console') && (
             <button type="button" data-tour-id="nav-admin" onClick={() => go('admin')} className={cls(currentPage === 'admin')}>
               <Shield size={15} className="shrink-0 opacity-75" />
@@ -1042,25 +809,6 @@ function AppSidebar({
               </span>
             </div>
             <div className="mx-3 h-px bg-line" />
-            {isFreePlan ? (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => go('billing')}
-                className="flex w-full items-center gap-2.5 px-3.5 py-2 text-[13px] font-medium text-blue hover:bg-pale transition-colors"
-              >
-                <Star size={14} className="shrink-0" /> Upgrade
-              </button>
-            ) : (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => go('billing')}
-                className="flex w-full items-center gap-2.5 px-3.5 py-2 text-[13px] font-normal text-ink hover:bg-sunken transition-colors"
-              >
-                <CreditCard size={14} className="shrink-0 text-muted" /> Billing
-              </button>
-            )}
             <button
               type="button"
               role="menuitem"
@@ -1190,11 +938,8 @@ function App() {
   const [currentPathname, setCurrentPathname] = useState(() => (typeof window !== 'undefined' ? window.location.pathname : '/'));
   const [postsMenuOpen, setPostsMenuOpen] = useState(false);
   const [marketingMenuOpen, setMarketingMenuOpen] = useState(false);
-  const [crmMenuOpen, setCrmMenuOpen] = useState(false);
   const [salesMenuOpen, setSalesMenuOpen] = useState(false);
-  const [connectorMenuOpen, setConnectorMenuOpen] = useState(false);
   const [disabledNav, setDisabledNav] = useState<Set<string>>(new Set());
-  const [connectorSetupDomain, setConnectorSetupDomain] = useState<any>(null);
   const [currentTaskFilter, setCurrentTaskFilter] = useState('all');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [pendingTour, setPendingTour] = useState(false);
@@ -1270,14 +1015,8 @@ function App() {
       if (MARKETING_PAGES.includes(page)) {
         setMarketingMenuOpen(true);
       }
-      if (CRM_PAGES.includes(page)) {
-        setCrmMenuOpen(true);
-      }
       if (SALES_PAGES.includes(page)) {
         setSalesMenuOpen(true);
-      }
-      if (CONNECTOR_PAGES.includes(page)) {
-        setConnectorMenuOpen(true);
       }
       const path = PAGE_PATHS[page];
       if (window.location.pathname !== path || window.location.search) {
@@ -1426,7 +1165,7 @@ function App() {
 
     if (!loggedIn) {
       const publicPaths = ['/', '/privacy', '/terms', '/refund', '/login', '/tools', '/pricing', '/changelog', '/data-deletion', '/reset-password', '/verify-email'];
-      if (!publicPaths.includes(pathname) && !pathname.startsWith('/invite/') && !pathname.startsWith('/review/') && !pathname.startsWith('/survey/')) {
+      if (!publicPaths.includes(pathname) && !pathname.startsWith('/invite/') && !pathname.startsWith('/review/')) {
         navigatePath('/login', true);
       }
       return () => {
@@ -1439,9 +1178,7 @@ function App() {
       setCurrentPage(pageFromPath);
       if (CONTENT_PAGES.includes(pageFromPath)) setPostsMenuOpen(true);
       if (MARKETING_PAGES.includes(pageFromPath)) setMarketingMenuOpen(true);
-      if (CRM_PAGES.includes(pageFromPath)) setCrmMenuOpen(true);
       if (SALES_PAGES.includes(pageFromPath)) setSalesMenuOpen(true);
-      if (CONNECTOR_PAGES.includes(pageFromPath)) setConnectorMenuOpen(true);
       return () => {
         canceled = true;
       };
@@ -1463,7 +1200,7 @@ function App() {
 
       if (!isAuthenticated) {
         const publicPaths = ['/', '/privacy', '/terms', '/refund', '/login', '/tools', '/pricing', '/changelog', '/data-deletion', '/reset-password', '/verify-email'];
-        if (!publicPaths.includes(pathname) && !pathname.startsWith('/invite/') && !pathname.startsWith('/review/') && !pathname.startsWith('/survey/')) {
+        if (!publicPaths.includes(pathname) && !pathname.startsWith('/invite/') && !pathname.startsWith('/review/')) {
           navigatePath('/login', true);
           setCurrentPathname('/login');
         }
@@ -1475,9 +1212,7 @@ function App() {
         setCurrentPage(pageFromPath);
         if (CONTENT_PAGES.includes(pageFromPath)) setPostsMenuOpen(true);
         if (MARKETING_PAGES.includes(pageFromPath)) setMarketingMenuOpen(true);
-        if (CRM_PAGES.includes(pageFromPath)) setCrmMenuOpen(true);
         if (SALES_PAGES.includes(pageFromPath)) setSalesMenuOpen(true);
-        if (CONNECTOR_PAGES.includes(pageFromPath)) setConnectorMenuOpen(true);
         return;
       }
 
@@ -1531,10 +1266,6 @@ function App() {
     return <Suspense fallback={<PageFallback />}><AcceptInvite token={token} onLoginClick={goToLogin} /></Suspense>;
   }
   if (currentPathname === '/pricing' && !isAuthenticated) return <Suspense fallback={<PageFallback />}><PublicPricing onLoginClick={goToLogin} /></Suspense>;
-  if (currentPathname.startsWith('/survey/')) {
-    const surveyId = currentPathname.replace('/survey/', '');
-    return <Suspense fallback={<PageFallback />}><PublicSurvey surveyId={surveyId} /></Suspense>;
-  }
   if (currentPathname.startsWith('/review/')) {
     const reviewToken = currentPathname.replace('/review/', '');
     return <Suspense fallback={<PageFallback />}><ClientReviewPortal token={reviewToken} /></Suspense>;
@@ -1586,47 +1317,20 @@ function App() {
       case 'media': return <Media />;
       case 'integrations': return <Integrations />;
       case 'marketing': return <MarketingOverview navigateToPage={navigateToPage} />;
-      case 'marketing-contacts': return <MarketingContacts />;
-      case 'marketing-email': return <MarketingEmail />;
-      case 'marketing-campaigns': return <MarketingCampaigns />;
-      case 'marketing-surveys': return <MarketingSurveys />;
-      case 'marketing-automations': return <MarketingAutomations />;
-      case 'marketing-forms': return <MarketingForms />;
-      case 'marketing-leads': return <MarketingLeads navigateToPage={navigateToPage} />;
-      case 'marketing-leads-import': return <MarketingLeadsImport navigateToPage={navigateToPage} />;
       case 'sales-leads': return <SalesLeads />;
       case 'sales-conversations': return <SalesConversations />;
       case 'sales-followups': return <SalesFollowUps />;
       case 'sales-intelligence': return <SalesIntelligence />;
       case 'sales-settings': return <SalesSettings />;
       case 'crm-companies': return <CRMCompanies />;
-      case 'crm-pipeline': return <CRMPipeline />;
-      case 'crm-scoring': return <CRMLeadScoring />;
-      case 'gmail-agent': return <GmailAgent />;
-      case 'connector-hub': return (
-        <ConnectorHub
-          onNavigateToSetup={(domain) => { setConnectorSetupDomain(domain); navigateToPage('connector-setup'); }}
-          onNavigateToSync={() => navigateToPage('connector-sync')}
-        />
-      );
-      case 'connector-setup': return connectorSetupDomain ? (
-        <ConnectorProviderSetup
-          domain={connectorSetupDomain}
-          onBack={() => navigateToPage('connector-hub')}
-        />
-      ) : <ConnectorHub onNavigateToSetup={(d) => { setConnectorSetupDomain(d); navigateToPage('connector-setup'); }} onNavigateToSync={() => navigateToPage('connector-sync')} />;
-      case 'connector-sync': return <ConnectorSyncDashboard onBack={() => navigateToPage('connector-hub')} />;
       case 'workspace': return <Workspace />;
-      case 'credits': return <Credits />;
-      case 'billing': return <Billing />;
       case 'memory': return <Memory />;
       case 'notifications': return <Notifications />;
       case 'tasks': return <TasksPage initialFilter={currentTaskFilter} />;
       case 'project-settings': return <ProjectSettings />;
-      case 'settings': return <SettingsPage currentUser={authUser} onUserUpdated={handleUserUpdated} onNavigateToBilling={() => navigateToPage('billing')} />;
+      case 'settings': return <SettingsPage currentUser={authUser} onUserUpdated={handleUserUpdated} />;
       case 'workflow': return <WorkflowPage />;
       case 'discover': return <Discover />;
-      case 'ai-team': return <AITeam />;
       case 'social-inbox': return <SocialInbox />;
       default: return <Dashboard currentUser={authUser} />;
     }
@@ -1639,12 +1343,8 @@ function App() {
     setPostsMenuOpen,
     marketingMenuOpen,
     setMarketingMenuOpen,
-    crmMenuOpen,
-    setCrmMenuOpen,
     salesMenuOpen,
     setSalesMenuOpen,
-    connectorMenuOpen,
-    setConnectorMenuOpen,
     profileNeedsAttention,
     navigateToPage,
     handleLogout,
@@ -1709,9 +1409,7 @@ function App() {
                   >
                     Overview
                   </button>
-                )}
-                <CreditBadge onOpen={() => navigateToPage('credits')} />
-                <NotificationBell />
+                )}                <NotificationBell />
                 <span className="os-topbar-date">
                   {new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date())}
                 </span>
@@ -1741,7 +1439,7 @@ function App() {
           payload={quotaModalPayload}
           onClose={() => setQuotaModalPayload(null)}
           onNavigateToPricing={() => navigateToPage('pricing')}
-          onNavigateToBilling={() => navigateToPage('credits')}
+          onNavigateToBilling={() => navigateToPage('pricing')}
         />
 
         {/* Per-page quick guide */}

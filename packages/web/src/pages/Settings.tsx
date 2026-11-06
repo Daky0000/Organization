@@ -4,7 +4,6 @@ import {
   Bell,
   Camera,
   Check,
-  CreditCard,
   Eye,
   EyeOff,
   Image as ImageIcon,
@@ -26,7 +25,6 @@ import { API_BASE_URL } from '../utils/apiBase';
 type SettingsProps = {
   currentUser: AppUser | null;
   onUserUpdated: (user: AppUser) => void;
-  onNavigateToBilling?: () => void;
 };
 
 type ProfileForm = {
@@ -43,13 +41,6 @@ type NotifPrefs = {
   marketing_emails: boolean;
 };
 
-type BillingSummary = {
-  plan_name: string;
-  status: string;
-  posts_this_period: number;
-  posts_limit: number;
-  current_period_end: string | null;
-};
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -101,8 +92,8 @@ function SectionCard({ children, className = '' }: { children: React.ReactNode; 
 
 // ─── main component ───────────────────────────────────────────────────────────
 
-export default function Settings({ currentUser, onUserUpdated, onNavigateToBilling }: SettingsProps) {
-  const [tab, setTab] = useState<'account' | 'security' | 'notifications' | 'billing' | 'apikeys'>('account');
+export default function Settings({ currentUser, onUserUpdated }: SettingsProps) {
+  const [tab, setTab] = useState<'account' | 'security' | 'notifications' | 'apikeys'>('account');
 
   // ── Account tab ──────────────────────────────────────────────────────────
   const [form, setForm] = useState<ProfileForm>(() => toForm(currentUser));
@@ -255,9 +246,6 @@ export default function Settings({ currentUser, onUserUpdated, onNavigateToBilli
     { key: 'marketing_emails', label: 'Product updates', desc: 'New features, tips, and announcements' },
   ];
 
-  // ── Billing tab ──────────────────────────────────────────────────────────
-  const [billing, setBilling] = useState<BillingSummary | null>(null);
-  const [loadingBilling, setLoadingBilling] = useState(false);
 
   // ── API keys state ──
   type ApiKeyRow = { id: string; name: string; key_prefix: string; created_at: string; last_used_at: string | null; revoked_at: string | null };
@@ -373,50 +361,12 @@ export default function Settings({ currentUser, onUserUpdated, onNavigateToBilli
     void loadOsBridge();
   };
 
-  const [creditInfo, setCreditInfo] = useState<{ credits: number; reset_date: string | null } | null>(null);
-  const [creditHistory, setCreditHistory] = useState<Array<{ delta: number; reason: string; created_at: string }>>([]);
-
-  useEffect(() => {
-    if (tab !== 'billing') return;
-    fetch(`${API_BASE_URL}/api/credits/balance`, { headers: authHdr() })
-      .then((r) => r.json())
-      .then((d: { success?: boolean; credits?: number; reset_date?: string | null }) => {
-        if (d?.success) setCreditInfo({ credits: d.credits ?? 0, reset_date: d.reset_date ?? null });
-      })
-      .catch(() => undefined);
-    fetch(`${API_BASE_URL}/api/credits/history`, { headers: authHdr() })
-      .then((r) => r.json())
-      .then((d: { success?: boolean; entries?: Array<{ delta: number; reason: string; created_at: string }> }) => {
-        if (d?.success && Array.isArray(d.entries)) setCreditHistory(d.entries);
-      })
-      .catch(() => undefined);
-  }, [tab]);
-
-  useEffect(() => {
-    if (tab !== 'billing') return;
-    setLoadingBilling(true);
-    fetch(`${API_BASE_URL}/api/v1/billing/subscription`, { headers: authHdr() })
-      .then((r) => r.json())
-      .then((d: { plan?: { name?: string }; subscription?: { status?: string; current_period_end?: string }; usage?: { posts_this_period?: number; posts_limit?: number } }) => {
-        setBilling({
-          plan_name: d.plan?.name ?? 'Free Plan',
-          status: d.subscription?.status ?? 'active',
-          posts_this_period: d.usage?.posts_this_period ?? 0,
-          posts_limit: d.usage?.posts_limit ?? 0,
-          current_period_end: d.subscription?.current_period_end ?? null,
-        });
-      })
-      .catch(() => undefined)
-      .finally(() => setLoadingBilling(false));
-  }, [tab]);
-
   // ── render ────────────────────────────────────────────────────────────────
 
   const TABS = [
     { id: 'account', label: 'Account', icon: User },
     { id: 'security', label: 'Security', icon: Shield },
     { id: 'notifications', label: 'Notifications', icon: Bell },
-    { id: 'billing', label: 'Billing', icon: CreditCard },
     { id: 'apikeys', label: 'API Keys', icon: KeyRound },
   ] as const;
 
@@ -665,129 +615,6 @@ export default function Settings({ currentUser, onUserUpdated, onNavigateToBilli
                 {savingNotifs ? 'Saving…' : 'Save preferences'}
               </button>
             </div>
-          </SectionCard>
-        </div>
-      )}
-
-      {/* ── Billing ── */}
-      {tab === 'billing' && (
-        <div className="space-y-5">
-          <SectionCard>
-            <div className="mb-4 flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-100">
-                <CreditCard size={16} className="text-indigo-600" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-slate-900">Current plan</p>
-                <p className="text-xs text-slate-500">Your subscription and usage</p>
-              </div>
-            </div>
-
-            {loadingBilling
-              ? <div className="flex items-center justify-center py-8"><Loader2 size={20} className="animate-spin text-slate-300" /></div>
-              : billing
-                ? (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-5 py-4">
-                      <div>
-                        <p className="text-xl font-black text-slate-950">{billing.plan_name}</p>
-                        <p className="mt-0.5 text-xs font-semibold capitalize text-slate-500">{billing.status}</p>
-                      </div>
-                      {billing.current_period_end && (
-                        <p className="text-right text-xs text-slate-400">
-                          Renews<br />
-                          <span className="font-semibold text-slate-700">
-                            {new Date(billing.current_period_end).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
-                          </span>
-                        </p>
-                      )}
-                    </div>
-
-                    {billing.posts_limit > 0 && (
-                      <div>
-                        <div className="mb-1.5 flex items-center justify-between text-xs font-semibold text-slate-500">
-                          <span>Posts this period</span>
-                          <span>{billing.posts_this_period} / {billing.posts_limit}</span>
-                        </div>
-                        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
-                          <div
-                            className="h-2 rounded-full bg-indigo-600 transition-all"
-                            style={{ width: `${Math.min(100, (billing.posts_this_period / billing.posts_limit) * 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="flex gap-3 pt-1">
-                      <button
-                        type="button"
-                        onClick={onNavigateToBilling}
-                        className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-700 transition-colors"
-                      >
-                        <CreditCard size={14} /> Manage billing
-                      </button>
-                    </div>
-                  </div>
-                )
-                : (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-4">
-                    <p className="text-sm font-black text-slate-950">Free Plan</p>
-                    <p className="mt-1 text-xs text-slate-500">Upgrade to unlock more posts, team members, and integrations.</p>
-                    <button
-                      type="button"
-                      onClick={onNavigateToBilling}
-                      className="mt-3 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-700 transition-colors"
-                    >
-                      View plans
-                    </button>
-                  </div>
-                )
-            }
-          </SectionCard>
-
-          <SectionCard>
-            <div className="mb-4 flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100">
-                <Sparkles size={16} className="text-amber-600" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-slate-900">AI credits</p>
-                <p className="text-xs text-slate-500">Powers AI chat, agents, and automations · resets monthly with your plan</p>
-              </div>
-            </div>
-            {creditInfo ? (
-              <>
-                <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-5 py-4">
-                  <p className="text-2xl font-black text-slate-950">{creditInfo.credits.toLocaleString()} <span className="text-sm font-semibold text-slate-400">credits</span></p>
-                  {creditInfo.reset_date && (
-                    <p className="text-right text-xs text-slate-400">
-                      Resets<br />
-                      <span className="font-semibold text-slate-700">{new Date(creditInfo.reset_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
-                    </p>
-                  )}
-                </div>
-                {creditHistory.length > 0 && (
-                  <div className="mt-4">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Recent activity</p>
-                    <div className="divide-y divide-slate-100">
-                      {creditHistory.slice(0, 8).map((e, i) => (
-                        <div key={i} className="flex items-center justify-between py-2">
-                          <div className="min-w-0">
-                            <p className="truncate text-xs font-semibold text-slate-700">{e.reason.replace(/_/g, ' ')}</p>
-                            <p className="text-[11px] text-slate-400">{new Date(e.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
-                          </div>
-                          <span className={`shrink-0 text-xs font-black ${e.delta < 0 ? 'text-slate-500' : 'text-emerald-600'}`}>
-                            {e.delta > 0 ? '+' : ''}{e.delta}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="flex items-center justify-center py-6"><Loader2 size={18} className="animate-spin text-slate-300" /></div>
-            )}
           </SectionCard>
         </div>
       )}

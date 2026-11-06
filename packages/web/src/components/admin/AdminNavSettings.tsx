@@ -14,16 +14,8 @@ interface NavItem {
 const NAV_TREE: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'notifications', label: 'Notifications' },
-  { key: 'ai-team', label: 'AI Team' },
-  {
-    key: 'crm', label: 'CRM',
-    children: [
-      { key: 'crm-companies', label: 'Companies' },
-      { key: 'crm-pipeline', label: 'Deals' },
-      { key: 'crm-scoring', label: 'Lead Scoring' },
-      { key: 'crm-gmail-agent', label: 'Gmail Agent' },
-    ],
-  },
+  { key: 'social-inbox', label: 'Social Inbox' },
+  { key: 'crm-companies', label: 'Companies' },
   {
     key: 'sales', label: 'Sales',
     children: [
@@ -47,25 +39,9 @@ const NAV_TREE: NavItem[] = [
       { key: 'content-studio', label: 'Content › AI Studio' },
       { key: 'content-workflow', label: 'Content › Workflow' },
       { key: 'analytics', label: 'Content › Analytics' },
-      { key: 'marketing-contacts', label: 'Contacts' },
-      { key: 'marketing-email', label: 'Email' },
-      { key: 'marketing-campaigns', label: 'Campaigns' },
-      { key: 'marketing-surveys', label: 'Surveys' },
-      { key: 'marketing-automations', label: 'Automations' },
-      { key: 'marketing-forms', label: 'Forms' },
-      { key: 'marketing-leads', label: 'Lead Generation' },
-      { key: 'marketing-leads-import', label: 'Lead Generation › Import' },
     ],
   },
   { key: 'integrations', label: 'Integrations' },
-  {
-    key: 'connectors', label: 'Connectors',
-    children: [
-      { key: 'connectors-hub', label: 'Hub' },
-      { key: 'connectors-sync', label: 'Sync Dashboard' },
-    ],
-  },
-  { key: 'billing', label: 'Billing' },
 ];
 
 export default function AdminNavSettings() {

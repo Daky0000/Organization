@@ -308,40 +308,8 @@ export const PAGE_GUIDES: Record<string, { title: string; steps: TourStep[] }> =
   marketing: {
     title: 'Marketing Overview',
     steps: [
-      { emoji: '📊', title: 'Your marketing hub', description: 'See email and campaign performance at a glance — open rates, active campaigns, total clicks, and conversions in one place.' },
-      { emoji: '🔗', title: 'Jump into any section', description: 'Use the sidebar to navigate to Contacts, Email, Campaigns, or Surveys. Each section has its own focused workspace.' },
-    ],
-  },
-  'marketing-contacts': {
-    title: 'Contacts',
-    steps: [
-      { emoji: '👥', title: 'Contact management', description: 'Import contacts via CSV or add them manually. Segment your list with tags to target specific groups.', target: '[data-tour-id="mailing-contacts"]', placement: 'top' },
-      { emoji: '🏷️', title: 'Segments', description: 'Group contacts by shared properties to send targeted campaigns.' },
-    ],
-  },
-  'marketing-email': {
-    title: 'Email Marketing',
-    steps: [
-      { emoji: '📧', title: 'Email campaigns', description: 'Create and send email campaigns to your subscriber list. Write content in the rich-text editor or use AI to generate copy.', target: '[data-tour-id="btn-new-email"]', placement: 'bottom' },
-      { emoji: '⚡', title: 'Automations', description: 'Set up trigger-based email sequences — welcome emails on signup, re-engagement on inactivity, and more.' },
-      { emoji: '📊', title: 'Analytics', description: 'Track open rates, click rates, and unsubscribes directly in the analytics tab.' },
-    ],
-  },
-  'marketing-campaigns': {
-    title: 'Campaigns',
-    steps: [
-      { emoji: '➕', title: 'Create a campaign', description: 'Click "New Campaign", set a goal, add channels, and generate UTM tracking links.', target: '[data-tour-id="btn-new-campaign"]', placement: 'bottom' },
-      { emoji: '🎯', title: 'Multi-channel campaigns', description: 'Group posts, emails, and paid ads under one campaign goal.', target: '[data-tour-id="campaigns-list"]', placement: 'top' },
-      { emoji: '📌', title: 'Track performance', description: 'The Performance tab shows clicks by source, conversion rates, and funnel drop-off.' },
-    ],
-  },
-  'marketing-surveys': {
-    title: 'Surveys',
-    steps: [
-      { emoji: '📝', title: 'Create a survey', description: 'Click "New Survey" to start. Give it a title and description, then add blocks to build your questions.' },
-      { emoji: '⊕', title: 'Add blocks', description: 'Click the ── ⊕ ── dividers to add blocks: radio buttons, checkboxes, rating stars, NPS, open text, and more.' },
-      { emoji: '👁️', title: 'Preview before sharing', description: 'Click "Preview" in the builder header to see exactly what respondents will see — works even in Draft mode.' },
-      { emoji: '🔗', title: 'Share your survey', description: 'Set status to Active, then copy the public link from the Share panel. Anyone with the link can respond.' },
+      { emoji: '📊', title: 'Your marketing hub', description: 'Jump into posts, AI Studio, media, workflows, analytics and the social inbox from one place.' },
+      { emoji: '🔗', title: 'Jump into any section', description: 'Use the sidebar to open any content tool. Each one has its own focused workspace.' },
     ],
   },
   'project-settings': {
@@ -357,17 +325,8 @@ export const PAGE_GUIDES: Record<string, { title: string; steps: TourStep[] }> =
     title: 'Admin',
     steps: [
       { emoji: '🧑‍🤝‍🧑', title: 'User Management', description: 'View all registered users, their plans, and last active dates. Promote users to admin or suspend accounts.', target: '[data-tour-id="admin-tab-users"]', placement: 'right' },
-      { emoji: '💳', title: 'Billing & Subscriptions', description: 'See MRR, ARR, active subscriptions, and recent transactions. Drill into individual payments.', target: '[data-tour-id="admin-tab-billing"]', placement: 'right' },
       { emoji: '🤖', title: 'AI Configuration', description: 'Set your Anthropic or Google Gemini API key, choose the model, and customise the Daky system prompt.', target: '[data-tour-id="admin-accordion-ai"]', placement: 'bottom' },
       { emoji: '🎓', title: 'Daky Learn', description: 'Add article and video URLs for Daky to extract marketing insights from and compile into AI skills.' },
-    ],
-  },
-  billing: {
-    title: 'Billing',
-    steps: [
-      { emoji: '💳', title: 'Your current plan', description: 'This card shows your active subscription, next billing date, and usage for the current period.', target: '[data-tour-id="billing-plan-card"]', placement: 'bottom' },
-      { emoji: '⬆️', title: 'Upgrade', description: 'Click "Upgrade plan" to move to a higher tier and unlock more posts, agents, team seats, and analytics.', target: '[data-tour-id="btn-upgrade"]', placement: 'bottom' },
-      { emoji: '🔄', title: 'Manage subscription', description: 'Cancel, pause, or change your plan at any time. Changes take effect at the end of your current billing period.' },
     ],
   },
   workspace: {
@@ -401,23 +360,6 @@ export const PAGE_GUIDES: Record<string, { title: string; steps: TourStep[] }> =
       { emoji: '🔍', title: 'Search by name or tag', description: 'Type in the search box to filter instantly. Click any image to copy its link or use it in a post.' },
     ],
   },
-  'marketing-automations': {
-    title: 'Automations',
-    steps: [
-      { emoji: '⚡', title: 'Emails that send themselves', description: 'An automation is a flow: something happens (a trigger), then your emails go out — automatically, to the right person.' },
-      { emoji: '🎬', title: 'Start with a trigger', description: 'The "starting point" is the event that kicks the flow off — like someone joining your list or clicking a link.' },
-      { emoji: '⏱️', title: 'Add delays and conditions', description: 'Wait steps space emails out over days. Conditions branch the flow — e.g. only email people with a certain tag.' },
-      { emoji: '▶️', title: 'Activate when ready', description: 'Flows start as drafts. Flip the status to Active and the automation runs for every new person who triggers it.' },
-    ],
-  },
-  'marketing-forms': {
-    title: 'Forms',
-    steps: [
-      { emoji: '📥', title: 'Capture leads anywhere', description: 'Build a signup form here, then embed it on your website or share its link. Every submission becomes a contact.' },
-      { emoji: '🏷️', title: 'Auto-tag new signups', description: 'Give the form a tag and every signup gets it — perfect for triggering a welcome automation or segmenting later.' },
-      { emoji: '🔗', title: 'Share or embed', description: 'Each form has a hosted page you can link to directly, or an embed snippet for your own site.' },
-    ],
-  },
   'crm-companies': {
     title: 'CRM — Companies',
     steps: [
@@ -425,57 +367,11 @@ export const PAGE_GUIDES: Record<string, { title: string; steps: TourStep[] }> =
       { emoji: '📝', title: 'Notes and comments', description: 'Log calls, meetings, and context on each company so the whole team sees the full story.' },
     ],
   },
-  'crm-pipeline': {
-    title: 'CRM — Pipeline',
-    steps: [
-      { emoji: '📊', title: 'Your deals, visualised', description: 'Each column is a stage. Drag a deal card to the next column as it progresses toward closing.' },
-      { emoji: '💰', title: 'Deal value adds up', description: 'Each stage shows its total value, so you can see how much revenue is sitting at each step.' },
-      { emoji: '🗂️', title: 'Click a deal for detail', description: 'Open any card to edit value, contacts, notes, and history — or mark it won or lost.' },
-    ],
-  },
-  'crm-scoring': {
-    title: 'Lead Scoring',
-    steps: [
-      { emoji: '🎯', title: 'Find your hottest leads', description: 'Scoring gives each contact points based on what they do — opens, clicks, form fills. High score = ready to talk.' },
-      { emoji: '➕', title: 'Rules add points', description: 'Create a rule like "has newsletter tag: +10" or "clicked a link: +5". Scores update automatically as contacts act.' },
-      { emoji: '🥇', title: 'Sort by score', description: 'The leaderboard ranks contacts by score, so sales attention always goes where it counts most.' },
-    ],
-  },
-  'gmail-agent': {
-    title: 'Gmail Agent',
-    steps: [
-      { emoji: '📬', title: 'AI inside your inbox', description: 'Connect Gmail and the agent reads context, summarises long threads, and drafts replies for you.' },
-      { emoji: '🔐', title: 'Private and revocable', description: 'You approve access through Google — disconnect anytime and the agent loses access instantly.' },
-      { emoji: '✍️', title: 'Draft, never send', description: 'The agent prepares drafts — you always review and hit send yourself.' },
-    ],
-  },
-  'connector-hub': {
-    title: 'Connector Hub',
-    steps: [
-      { emoji: '🔌', title: 'Bring your other tools', description: 'Connectors link outside tools (CRMs, e-commerce, calendars) so their data can flow into your workspace.' },
-      { emoji: '🧭', title: 'Pick a category, pick a provider', description: 'Browse by what you need — contacts, deals, products — then choose the provider you already use.' },
-    ],
-  },
-  'connector-sync': {
-    title: 'Data Sync',
-    steps: [
-      { emoji: '🔄', title: 'Scheduled data pulls', description: 'A sync job fetches data from a connected provider on a schedule — hourly, daily, or weekly.' },
-      { emoji: '🕓', title: 'Run history', description: 'Every run is logged with its result, so you can see exactly when data last came in and whether it worked.' },
-    ],
-  },
   discover: {
     title: 'Discover',
     steps: [
       { emoji: '✨', title: 'Browse AI-made visuals', description: 'A gallery of images and videos generated on the platform — use it for inspiration or as a starting point.' },
       { emoji: '🎨', title: 'Remix anything', description: 'Open any item to see its prompt, then tweak it in the AI studio to make your own version.' },
-    ],
-  },
-  'ai-team': {
-    title: 'AI Team',
-    steps: [
-      { emoji: '🤖', title: 'Meet your agents', description: 'Each agent has a specialty — content, strategy, analytics, design. They all share what they know about your brand.' },
-      { emoji: '🧠', title: 'Teach them once', description: 'Fill in your brand details (voice, audience, products) and every agent uses it in every answer from then on.' },
-      { emoji: '🗣️', title: 'Extract your voice', description: 'Paste examples of your writing and click "Extract Voice" — agents will learn to write the way you do.' },
     ],
   },
   pricing: {

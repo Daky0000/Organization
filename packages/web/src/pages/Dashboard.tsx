@@ -211,14 +211,12 @@ function OnboardingChecklist({
   hasAccounts,
   hasPosts,
   hasDesigns,
-  hasEmails,
   userId,
 }: {
   hasBrief: boolean;
   hasAccounts: boolean;
   hasPosts: boolean;
   hasDesigns: boolean;
-  hasEmails: boolean;
   userId?: string | null;
 }) {
   const storageKey = `onboarding_dismissed_${userId ?? 'anon'}`;
@@ -229,7 +227,6 @@ function OnboardingChecklist({
     { label: 'Connect a social platform', done: hasAccounts, href: '/integrations', icon: Link2 },
     { label: 'Create your first post', done: hasPosts, href: '/posts', icon: FileText },
     { label: 'Design a card in Visual Studio', done: hasDesigns, href: '/cards', icon: Palette },
-    { label: 'Send a marketing email', done: hasEmails, href: '/marketing/email', icon: Bell },
   ];
   const completed = steps.filter((s) => s.done).length;
   const allDone = completed === steps.length;
@@ -321,7 +318,6 @@ export default function Dashboard({ currentUser }: DashboardProps) {
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
   const [designs, setDesigns] = useState<UserDesign[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
-  const [emailsSent, setEmailsSent] = useState(false);
   const [hasBrief, setHasBrief] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -341,14 +337,6 @@ export default function Dashboard({ currentUser }: DashboardProps) {
       setPosts(postData);
       setAccounts(accountData);
       setDesigns(designData);
-      fetch(`${API_BASE_URL}/api/mailing/analytics`, {
-        headers: { Authorization: `Bearer ${tok()}` },
-      })
-        .then((r) => r.json())
-        .then((d) => {
-          if (active && d?.campaigns?.sent > 0) setEmailsSent(true);
-        })
-        .catch(() => undefined);
       fetch(`${API_BASE_URL}/api/memory`, {
         headers: { Authorization: `Bearer ${tok()}` },
       })
@@ -531,9 +519,7 @@ export default function Dashboard({ currentUser }: DashboardProps) {
             hasBrief={hasBrief}
             hasAccounts={accounts.length > 0}
             hasPosts={posts.length > 0}
-            hasDesigns={designs.length > 0}
-            hasEmails={emailsSent}
-            userId={currentUser?.id}
+            hasDesigns={designs.length > 0}            userId={currentUser?.id}
           />
 
           {/* ── Active Project Summary (if project selected) ── */}

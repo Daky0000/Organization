@@ -1,5 +1,4 @@
 @import 'tailwindcss';
-@import './components/leads/leads.css';
 @config '../tailwind.config.js';
 
 /* ==========================================================================

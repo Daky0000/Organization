@@ -3,15 +3,12 @@ import {
   Bot,
   ChevronDown,
   Clapperboard,
-  CreditCard,
   FileText,
-  Film,
   KeyRound,
   LayoutDashboard,
   LogOut,
   Network,
   Plug,
-  Receipt,
   SlidersHorizontal,
   Users,
   Waypoints,
@@ -31,14 +28,12 @@ const AdminOverview = lazy(() => import('../components/admin/AdminOverview'));
 const UserManagementPage = lazy(() => import('../components/admin/UserManagementPage'));
 const PricingManagement = lazy(() => import('../components/admin/PricingManagement'));
 const AdminCardsManagement = lazy(() => import('../components/admin/AdminCardsManagement'));
-const PaymentManagement = lazy(() => import('../components/admin/PaymentManagement'));
 const AdminAuthProviders = lazy(() => import('../components/admin/AdminAuthProviders'));
 const AdminPagesManagement = lazy(() => import('../components/admin/AdminPagesManagement'));
 const AdminMediaManagement = lazy(() => import('../components/admin/AdminMediaManagement'));
 const AdminIntegrations = lazy(() => import('../components/admin/AdminIntegrations'));
 const AdminAIConfig = lazy(() => import('../components/admin/AdminAIConfig'));
 const AdminAISkills = lazy(() => import('../components/admin/AdminAISkills'));
-const AdminBillingDashboard = lazy(() => import('../components/admin/AdminBillingDashboard'));
 const AdminApify = lazy(() => import('../components/admin/AdminApify'));
 const AdminLearn = lazy(() => import('../components/admin/AdminLearn'));
 const AdminAgents = lazy(() => import('../components/admin/AdminAgents'));
@@ -50,7 +45,6 @@ const AdminGoogle = lazy(() => import('../components/admin/AdminGoogle'));
 const AdminOpenAI = lazy(() => import('../components/admin/AdminOpenAI'));
 const AdminAuditLog = lazy(() => import('../components/admin/AdminAuditLog'));
 const AdminPlatformSettings = lazy(() => import('../components/admin/AdminPlatformSettings'));
-const AdminHiggsfield = lazy(() => import('../components/admin/AdminHiggsfield'));
 const AdminNavSettings = lazy(() => import('../components/admin/AdminNavSettings'));
 const AdminMCP = lazy(() => import('../components/admin/AdminMCP'));
 
@@ -64,7 +58,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     | 'users'
     | 'pricing'
     | 'cards'
-    | 'payments'
     | 'auth-providers'
     | 'integrations'
     | 'settings'
@@ -80,7 +73,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     | 'ai-config'
     | 'ai-skills'
     | 'ai-ops'
-    | 'billing'
     | 'apify'
     | 'learn'
     | 'agents'
@@ -89,7 +81,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     | 'kling'
     | 'google'
     | 'openai'
-    | 'higgsfield'
     | 'mcp';
 
   const TAB_PATHS: Record<AdminTab, string> = {
@@ -97,7 +88,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     users: '/admin/users',
     pricing: '/admin/pricing',
     cards: '/admin/cards',
-    payments: '/admin/payments',
     'auth-providers': '/admin/auth-providers',
     integrations: '/admin/integrations',
     settings: '/admin/settings',
@@ -113,7 +103,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     'ai-config': '/admin/ai',
     'ai-skills': '/admin/ai/skills',
     'ai-ops': '/admin/ai/ops',
-    billing: '/admin/billing',
     apify: '/admin/apify',
     learn: '/admin/learn',
     agents: '/admin/agents',
@@ -122,7 +111,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     kling: '/admin/kling',
     google: '/admin/google',
     openai: '/admin/openai',
-    higgsfield: '/admin/higgsfield',
     mcp: '/admin/mcp',
   };
 
@@ -131,7 +119,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     users: 'User Management',
     pricing: 'Pricing Plans',
     cards: 'Card Templates',
-    payments: 'Payments',
     'auth-providers': 'Login Providers',
     integrations: 'Integrations',
     settings: 'Platform Settings',
@@ -147,7 +134,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     'ai-config': 'AI Configuration',
     'ai-skills': 'Create AI Skill',
     'ai-ops': 'AI Ops — monitoring, guardrails, evals',
-    billing: 'Subscriptions',
     apify: 'Apify Actors & Runs',
     learn: 'Daky Learn',
     agents: 'Agent Team',
@@ -156,7 +142,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     kling: 'Kling AI',
     google: 'Google AI',
     openai: 'OpenAI',
-    higgsfield: 'Higgsfield AI',
     mcp: 'MCP Servers',
   };
 
@@ -173,7 +158,7 @@ const Admin = ({ currentUser }: AdminProps) => {
   const [activeTab, setActiveTab] = useState<AdminTab>(getInitialTab);
   const [pagesOpen, setPagesOpen] = useState(() => window.location.pathname.startsWith('/admin/pages'));
   const [aiOpen, setAiOpen] = useState(() =>
-    ['/admin/ai', '/admin/learn', '/admin/magnific', '/admin/nvidia', '/admin/kling', '/admin/google', '/admin/openai', '/admin/higgsfield'].some((p) =>
+    ['/admin/ai', '/admin/learn', '/admin/magnific', '/admin/nvidia', '/admin/kling', '/admin/google', '/admin/openai'].some((p) =>
       window.location.pathname.startsWith(p)
     )
   );
@@ -205,8 +190,6 @@ const Admin = ({ currentUser }: AdminProps) => {
     { id: 'users', label: 'User Management', icon: Users, active: true, tourId: 'admin-tab-users' },
     { id: 'pricing', label: 'Pricing Plans', icon: DollarSign, active: true },
     { id: 'cards', label: 'Card Templates', icon: Image, active: true },
-    { id: 'payments', label: 'Payments', icon: CreditCard, active: true },
-    { id: 'billing', label: 'Subscriptions', icon: Receipt, active: true, tourId: 'admin-tab-billing' },
     { id: 'auth-providers', label: 'Login Providers', icon: KeyRound, active: true },
     { id: 'integrations', label: 'Integrations', icon: Waypoints, active: true },
     { id: 'media', label: 'Media', icon: Image, active: true },
@@ -235,12 +218,11 @@ const Admin = ({ currentUser }: AdminProps) => {
     { id: 'kling', label: 'Kling AI', icon: Clapperboard },
     { id: 'google', label: 'Google AI', icon: Globe },
     { id: 'openai', label: 'OpenAI', icon: Bot },
-    { id: 'higgsfield', label: 'Higgsfield AI', icon: Film },
   ];
 
   const isPagesActive = activeTab.startsWith('pages-');
   const isAIActive =
-    activeTab.startsWith('ai-') || ['learn', 'magnific', 'nvidia', 'kling', 'google', 'openai', 'higgsfield'].includes(activeTab);
+    activeTab.startsWith('ai-') || ['learn', 'magnific', 'nvidia', 'kling', 'google', 'openai'].includes(activeTab);
   const isApifyActive = activeTab === 'apify';
 
   useEffect(() => {
@@ -250,7 +232,7 @@ const Admin = ({ currentUser }: AdminProps) => {
         setActiveTab(tab);
         setPagesOpen(tab.startsWith('pages-'));
         setAiOpen(
-          tab.startsWith('ai-') || ['learn', 'magnific', 'nvidia', 'kling', 'google', 'openai', 'higgsfield'].includes(tab)
+          tab.startsWith('ai-') || ['learn', 'magnific', 'nvidia', 'kling', 'google', 'openai'].includes(tab)
         );
         setApifyOpen(tab === 'apify');
       }
@@ -544,14 +526,12 @@ const Admin = ({ currentUser }: AdminProps) => {
               {activeTab === 'users' && <UserManagementPage currentAdminRole={currentAdminRole} />}
               {activeTab === 'pricing' && <PricingManagement />}
               {activeTab === 'cards' && <AdminCardsManagement />}
-              {activeTab === 'payments' && <PaymentManagement />}
               {activeTab === 'auth-providers' && <AdminAuthProviders />}
               {activeTab === 'integrations' && <AdminIntegrations />}
               {activeTab === 'media' && <AdminMediaManagement />}
               {activeTab === 'ai-config' && <AdminAIConfig />}
               {activeTab === 'ai-skills' && <AdminAISkills />}
               {activeTab === 'ai-ops' && <AdminAIOps />}
-              {activeTab === 'billing' && <AdminBillingDashboard />}
               {activeTab === 'apify' && <AdminApify />}
               {activeTab === 'mcp' && <AdminMCP />}
               {activeTab === 'learn' && <AdminLearn />}
@@ -564,7 +544,6 @@ const Admin = ({ currentUser }: AdminProps) => {
               {activeTab === 'settings' && <AdminPlatformSettings />}
               {activeTab === 'audit' && <AdminAuditLog />}
               {activeTab === 'nav-settings' && <AdminNavSettings />}
-              {activeTab === 'higgsfield' && <AdminHiggsfield />}
               {activeTab.startsWith('pages-') && <AdminPagesManagement activePage={activeTab} />}
             </Suspense>
           </main>

@@ -26,12 +26,8 @@ import LinkedInAnalytics from '../components/analytics/LinkedInAnalytics';
 import type { AnalyticsRangePreset, BlogAnalyticsDashboard, DashboardQuery } from '../services/blogAnalyticsService';
 import { blogAnalyticsService } from '../services/blogAnalyticsService';
 import { fetchApiJson } from '../utils/apiRequest';
-import { mailingService } from '../services/mailingService';
-import { campaignService } from '../services/campaignService';
-import { surveysService } from '../services/surveysService';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-type Tab = 'overview' | 'tiktok' | 'facebook' | 'instagram' | 'threads' | 'pinterest' | 'linkedin' | 'comparison' | 'marketing';
+type Tab = 'overview' | 'tiktok' | 'facebook' | 'instagram' | 'threads' | 'pinterest' | 'linkedin' | 'comparison';
 
 const PLATFORM_TABS: Array<{ id: Tab; label: string; platform: string }> = [
   { id: 'tiktok',    label: 'TikTok',    platform: 'tiktok' },
@@ -60,128 +56,6 @@ function downloadBlob(blob: Blob, filename: string) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-}
-
-// ─── Marketing Analytics Tab ─────────────────────────────────────────────────
-
-function MarketingAnalyticsTab() {
-  const [loading, setLoading] = useState(true);
-  const [emailData, setEmailData] = useState<{ contacts: { total: number; subscribed: number; unsubscribed: number }; campaigns: { sent: number; draft: number }; rates: { openRate: number; clickRate: number; bounceRate: number }; events: Record<string, number> } | null>(null);
-  const [campaigns, setCampaigns] = useState<Array<{ status: string; total_clicks?: number; total_conversions?: number }>>([]);
-  const [surveyCount, setSurveyCount] = useState(0);
-  const [contacts, setContacts] = useState<Array<{ custom_data: Record<string, string> }>>([]);
-
-  useEffect(() => {
-    Promise.allSettled([
-      mailingService.getAnalytics(),
-      campaignService.listCampaigns(),
-      surveysService.listSurveys(),
-      mailingService.listContacts(),
-    ]).then(([emailRes, campRes, survRes, contactsRes]) => {
-      if (emailRes.status === 'fulfilled') setEmailData(emailRes.value as any);
-      if (campRes.status === 'fulfilled') setCampaigns(campRes.value as any);
-      if (survRes.status === 'fulfilled') setSurveyCount((survRes.value as any[]).length);
-      if (contactsRes.status === 'fulfilled') setContacts(contactsRes.value as any);
-    }).finally(() => setLoading(false));
-  }, []);
-
-  const activeCampaigns = campaigns.filter((c: any) => c.status === 'active').length;
-  const totalClicks = campaigns.reduce((s: number, c: any) => s + (c.total_clicks || 0), 0);
-  const totalConversions = campaigns.reduce((s: number, c: any) => s + (c.total_conversions || 0), 0);
-  const hotLeads = contacts.filter(c => parseInt(c.custom_data?.lead_score || '0', 10) >= 80).length;
-  const avgScore = contacts.length > 0
-    ? Math.round(contacts.reduce((s, c) => s + parseInt(c.custom_data?.lead_score || '0', 10), 0) / contacts.length)
-    : 0;
-
-  const emailChartData = emailData ? [
-    { name: 'Open Rate', value: emailData.rates.openRate },
-    { name: 'Click Rate', value: emailData.rates.clickRate },
-    { name: 'Bounce Rate', value: emailData.rates.bounceRate },
-  ] : [];
-
-  const campaignByStatus = (['draft', 'active', 'paused', 'completed', 'archived'] as const).map(s => ({
-    name: s.charAt(0).toUpperCase() + s.slice(1),
-    count: campaigns.filter((c: any) => c.status === s).length,
-  })).filter(s => s.count > 0);
-
-  if (loading) return <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-slate-300" /></div>;
-
-  return (
-    <div className="space-y-6">
-      {/* KPI cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { label: 'Email Subscribers', value: emailData?.contacts.subscribed ?? 0, sub: `of ${emailData?.contacts.total ?? 0} total contacts`, color: 'text-indigo-600' },
-          { label: 'Campaigns Sent', value: emailData?.campaigns.sent ?? 0, sub: `${emailData?.campaigns.draft ?? 0} drafts`, color: 'text-slate-900' },
-          { label: 'Active Campaigns', value: activeCampaigns, sub: `${totalClicks.toLocaleString()} total clicks`, color: 'text-emerald-600' },
-          { label: 'Total Conversions', value: totalConversions, sub: `across all campaigns`, color: 'text-violet-600' },
-          { label: 'Email Open Rate', value: `${emailData?.rates.openRate ?? 0}%`, sub: 'of delivered emails', color: 'text-blue-600' },
-          { label: 'Click Rate', value: `${emailData?.rates.clickRate ?? 0}%`, sub: 'of delivered emails', color: 'text-cyan-600' },
-          { label: 'Hot Leads', value: hotLeads, sub: `avg score ${avgScore}`, color: 'text-red-500' },
-          { label: 'Surveys', value: surveyCount, sub: 'total created', color: 'text-amber-600' },
-        ].map(k => (
-          <div key={k.label} className="rounded-2xl border border-slate-200 bg-white p-5">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{k.label}</div>
-            <div className={`mt-2 text-3xl font-black ${k.color}`}>{k.value}</div>
-            <div className="mt-1 text-xs text-slate-400">{k.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Email Performance */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5">
-          <h3 className="text-sm font-bold text-slate-900 mb-4">Email Performance Rates</h3>
-          {emailChartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={emailChartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} unit="%" />
-                <Tooltip formatter={(v: number) => [`${v}%`, '']} contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 12 }} />
-                <Bar dataKey="value" fill="#2563EB" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-sm text-slate-400 text-center py-8">No email data yet. Send a campaign to see metrics here.</p>
-          )}
-        </div>
-
-        {/* Campaign breakdown */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5">
-          <h3 className="text-sm font-bold text-slate-900 mb-4">Campaigns by Status</h3>
-          {campaignByStatus.length > 0 ? (
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={campaignByStatus} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} allowDecimals={false} />
-                <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 12 }} />
-                <Bar dataKey="count" fill="#2563EB" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-sm text-slate-400 text-center py-8">No campaigns yet.</p>
-          )}
-        </div>
-      </div>
-
-      {/* Email Events breakdown */}
-      {emailData && Object.keys(emailData.events).length > 0 && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5">
-          <h3 className="text-sm font-bold text-slate-900 mb-4">Email Events Breakdown</h3>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {Object.entries(emailData.events).map(([type, count]) => (
-              <div key={type} className="rounded-xl bg-slate-50 p-4">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 capitalize">{type}</div>
-                <div className="mt-1 text-2xl font-black text-slate-900">{(count as number).toLocaleString()}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
 }
 
 export default function Analytics() {
@@ -422,19 +296,6 @@ export default function Analytics() {
 
       {/* Tab navigation */}
       <div className="flex flex-wrap gap-2" role="tablist">
-        {/* Marketing tab */}
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'marketing'}
-          onClick={() => handleTabChange('marketing')}
-          className={`rounded-full px-4 py-1.5 text-xs font-semibold transition ${
-            activeTab === 'marketing' ? 'bg-indigo-600 text-white shadow-sm' : 'border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
-          }`}
-        >
-          Marketing
-        </button>
-
         {/* Overview tab (always active) */}
         {(['overview', 'comparison'] as const).map((id) => {
           const label = id === 'overview' ? 'Overview' : 'Comparison';
@@ -559,10 +420,6 @@ export default function Analytics() {
         <ComparisonView days={socialDays} />
       )}
 
-      {/* ── Marketing tab ─────────────────────────────────────────── */}
-      {activeTab === 'marketing' && (
-        <MarketingAnalyticsTab />
-      )}
     </div>
   );
 }
