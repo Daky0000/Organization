@@ -1,0 +1,117 @@
+# Sync .project/sourceTexts/ folder (source text files)
+
+# Don't sync user-specific SQLite databases
+.project/*.sqlite
+
+# Don't sync SQLite auxiliary files
+.project/*.sqlite-wal
+.project/*.sqlite-shm
+
+# Don't sync user-specific files
+.project/complete_drafts.txt
+.project/localProjectSettings.json
+.project/localProjectSwap.json
+copilot-messages.log
+
+# Archive formats
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.gz
+*.bz2
+*.xz
+
+# Windows executables and installers
+*.exe
+*.msi
+*.bat
+*.cmd
+*.com
+*.scr
+*.dll
+
+# macOS executables and disk images
+*.dmg
+*.pkg
+*.vsix
+
+# Disk images and virtual machine files
+*.iso
+*.img
+*.vhd
+*.vmdk
+
+# System files
+.DS_Store
+.project/attachments/files/**
+
+# Committed SQLite dev database — must not be tracked
+packages/api/backend/database.sqlite
+
+# Temporary and disabled folders
+tmp_skills_disabled/
+tmp_skills/
+Old design/
+
+# Temporary development files
+tmp_find_bom.py
+tmp_preview_server.cjs
+tmp_preview_server.js
+.railway-build/
+packages/api/.railway-build/
+tmp_pinterest_*.html
+
+# Dependencies and local logs
+node_modules/
+*.log
+.npm-cache/
+
+# Web build outputs — built inside Docker by Railway, never committed
+packages/web/dist/
+# Root-level Vite scratch output (not committed)
+/dist/
+/assets/
+/index.html
+/404.html
+/CNAME
+# docs/ — Railway now serves the frontend; not needed in git
+/docs/
+
+# Temporary export/deploy artifacts
+tmp_deploy_repo/
+
+# API keys and tokens (should not be committed)
+tiktok*.txt
+
+# Environment files (never commit real secrets)
+.env
+.env.local
+.env.production
+.env.development
+.env.test
+.env.*.local
+backend/.env
+backend/.env.local
+backend/.env.production
+backend/.env.development
+backend/.env.test
+backend/.env.*.local
+packages/**/.env
+packages/**/.env.local
+packages/**/.env.production
+packages/**/.env.development
+packages/**/.env.test
+packages/**/.env.*.local
+
+# gh-pages deploy artifact at root (regenerated on deploy)
+/.nojekyll
+
+# Generated business docs (regenerable via scripts/generate-*-doc.mjs)
+/PRICING_FINANCIALS.docx
+/SYSTEM_OVERVIEW.docx
+
+files/

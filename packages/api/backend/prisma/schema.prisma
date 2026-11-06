@@ -1,0 +1,582 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============= USERS & AUTHENTICATION =============
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  username  String?  @unique
+  password  String   // hashed
+  firstName String?
+  lastName  String?
+  role      Role     @default(MANAGER)
+  agency    Agency   @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId  String
+
+  // Relationships
+  postsCreated       Post[]          @relation("createdBy")
+  integrations       UserIntegration[]
+  integrationLogs    IntegrationLog[]
+  automationRules    AutomationRule[]
+  automationLogs     AutomationLog[]
+  dailyMetrics       PlatformDailyMetrics[]
+  monthlyMetrics     PlatformMonthlyMetrics[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agencyId])
+  @@index([email])
+}
+
+enum Role {
+  ADMIN    // Full access
+  MANAGER  // Can create & request approval
+  VIEWER   // Read-only
+}
+
+// ============= AGENCIES =============
+
+model Agency {
+  id    String  @id @default(cuid())
+  name  String
+  users User[]
+
+  posts              Post[]
+  automationRules    AutomationRule[]
+  dailyMetrics       PlatformDailyMetrics[]
+  monthlyMetrics     PlatformMonthlyMetrics[]
+  media              Media[]
+  apiUsage           ApiUsage[]
+  subscription       AgencySubscription?
+  
+  subscriptionTier   SubscriptionTier @default(STARTER)
+  activeFeaturesUsed String[]         @default([])
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+}
+
+enum SubscriptionTier {
+  STARTER      // $199/month, 5 accounts
+  PROFESSIONAL // $499/month, 15 accounts
+  AGENCY       // $1299/month, unlimited
+}
+
+// ============= POSTS =============
+
+model Post {
+  id       String @id @default(cuid())
+  agency   Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId String
+
+  title   String
+  content Json   // { original, instagram, tiktok, linkedin, twitter }
+  media   Json?  // { urls: [], metadata: {} }
+
+  status      PostStatus @default(DRAFT)
+  scheduledAt DateTime?
+  postedAt    DateTime?
+
+  // Automation Features
+  isRecurring        Boolean       @default(false)
+  recurringPattern   RecurringType?
+  recurringDayOfWeek Int?
+  recurringEndDate   DateTime?
+  nextScheduledRun   DateTime?
+  lastExecutedAt     DateTime?
+
+  // Optimization
+  bestTimeToPost   DateTime?
+  isOptimized      Boolean       @default(false)
+  optimizationNote String?
+
+  // Creator
+  createdBy   User   @relation("createdBy", fields: [createdById], references: [id], onDelete: Cascade)
+  createdById String
+
+  // Platform integrations
+  platformIntegrations PostIntegration[]
+  automationLogs       AutomationLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agencyId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([isRecurring])
+  @@index([nextScheduledRun])
+  @@index([createdById])
+}
+
+enum PostStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SCHEDULED
+  POSTED
+  FAILED
+  RECURRING
+  ARCHIVED
+  CHANGES_REQUESTED
+}
+
+enum RecurringType {
+  DAILY
+  WEEKLY
+  MONTHLY
+  CUSTOM
+}
+
+// ============= AUTOMATION LOGS =============
+
+model AutomationLog {
+  id String @id @default(cuid())
+
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  postId String
+
+  executedAt DateTime
+  status     String
+  message    String?
+
+  platformsExecuted Json?
+  totalEngagement   Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([postId])
+  @@index([executedAt])
+  @@index([status])
+}
+
+// ============= AUTOMATION RULES =============
+
+model AutomationRule {
+  id String @id @default(cuid())
+
+  agency   Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId String
+
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  createdById String
+
+  name        String
+  description String?
+  isActive    Boolean @default(true)
+
+  triggerType      String
+  triggerCondition Json?
+
+  actionType          String
+  selectedIntegrations String[]
+
+  executeTime     String?
+  executeTimeZone String @default("UTC")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agencyId])
+  @@index([isActive])
+}
+
+// ============= PLATFORM METRICS (Daily Aggregation) =============
+
+model PlatformDailyMetrics {
+  id String @id @default(cuid())
+
+  userIntegration   UserIntegration @relation(fields: [userIntegrationId], references: [id], onDelete: Cascade)
+  userIntegrationId String
+
+  agency   Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId String
+
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  // Date tracking
+  date DateTime
+
+  // Platform (facebook, instagram, twitter, linkedin, tiktok, pinterest)
+  platform String
+
+  // Aggregated metrics for the day
+  postsPublished   Int @default(0)
+  totalReach       Int @default(0)
+  totalImpressions Int @default(0)
+  totalEngagement  Int @default(0)
+  totalLikes       Int @default(0)
+  totalComments    Int @default(0)
+  totalShares      Int @default(0)
+  totalSaves       Int @default(0)
+
+  // Engagement rate
+  engagementRate Float @default(0.0)
+
+  // Raw data (for detailed analysis)
+  rawData Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userIntegrationId, date, platform])
+  @@index([userIntegrationId])
+  @@index([agencyId])
+  @@index([userId])
+  @@index([date])
+  @@index([platform])
+  @@index([agencyId, date])
+  @@index([platform, date])
+}
+
+model PlatformMonthlyMetrics {
+  id String @id @default(cuid())
+
+  userIntegration   UserIntegration @relation(fields: [userIntegrationId], references: [id], onDelete: Cascade)
+  userIntegrationId String
+
+  agency   Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId String
+
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  // Month tracking (yyyy-mm)
+  year  Int
+  month Int
+
+  // Platform
+  platform String
+
+  // Aggregated for the month
+  postsPublished   Int @default(0)
+  totalReach       Int @default(0)
+  totalImpressions Int @default(0)
+  totalEngagement  Int @default(0)
+  totalLikes       Int @default(0)
+  totalComments    Int @default(0)
+  totalShares      Int @default(0)
+  totalSaves       Int @default(0)
+
+  // Growth metrics
+  growthRate     Float @default(0.0)
+  engagementRate Float @default(0.0)
+
+  // Top performing content
+  topPost Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userIntegrationId, year, month, platform])
+  @@index([userIntegrationId])
+  @@index([agencyId])
+  @@index([userId])
+}
+
+// ============= ACCOUNT METRICS (Followers, Engagement Rate) =============
+
+model AccountMetrics {
+  id String @id @default(cuid())
+
+  userIntegration   UserIntegration @relation(fields: [userIntegrationId], references: [id], onDelete: Cascade)
+  userIntegrationId String
+
+  platform String // 'tiktok', 'instagram', etc
+  
+  // Follower history
+  followers       Int @default(0)
+  followings      Int @default(0)
+  totalLikes      Int @default(0)
+  
+  // Account level engagement
+  avgEngagementRate Float @default(0.0)
+  
+  // Snapshot date
+  date DateTime
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@unique([userIntegrationId, platform, date])
+  @@index([userIntegrationId])
+  @@index([platform])
+  @@index([date])
+}
+
+// ============= INTEGRATIONS (Admin Setup) =============
+
+model Integration {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  type      String
+  enabled   Boolean  @default(true)
+
+  // Admin credentials
+  clientId     String?
+  clientSecret String?
+  apiKey       String?
+  apiSecret    String?
+  bearerToken  String?
+  appId        String?
+  redirectUrl  String?
+
+  userIntegrations UserIntegration[]
+  integrationLogs  IntegrationLog[]
+
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+}
+
+model UserIntegration {
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  integrationId String
+
+  // User's tokens
+  accessToken  String?
+  refreshToken String?
+  tokenExpiry  DateTime?
+
+  // Account info
+  accountId    String
+  accountName  String
+  accountEmail String?
+
+  status ConnectionStatus @default(CONNECTED)
+
+  posts PostIntegration[]
+  logs  IntegrationLog[]
+
+  dailyMetrics   PlatformDailyMetrics[]
+  monthlyMetrics PlatformMonthlyMetrics[]
+
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, integrationId, accountId])
+  @@index([userId])
+  @@index([integrationId])
+}
+
+enum ConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  EXPIRED
+  ERROR
+}
+
+// ============= POSTS & INTEGRATIONS =============
+
+model PostIntegration {
+  id String @id @default(cuid())
+
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  postId String
+
+  userIntegration   UserIntegration @relation(fields: [userIntegrationId], references: [id], onDelete: Cascade)
+  userIntegrationId String
+
+  // Platform-specific data
+  platformPostId String?
+  content        String
+  media          Json?
+  status         PostPlatformStatus @default(PENDING)
+  error          String?
+  retryCount     Int      @default(0)
+  maxRetries     Int      @default(3)
+
+  postedAt  DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([postId])
+  @@index([userIntegrationId])
+  @@index([status])
+}
+
+enum PostPlatformStatus {
+  PENDING
+  QUEUED
+  POSTED
+  FAILED
+  RETRY
+  SCHEDULED
+}
+
+// ============= LOGGING =============
+
+model IntegrationLog {
+  id String @id @default(cuid())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  integrationId String
+
+  userIntegration   UserIntegration? @relation(fields: [userIntegrationId], references: [id], onDelete: SetNull)
+  userIntegrationId String?
+
+  eventType    String
+  status       String
+
+  response     Json?
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([eventType])
+  @@index([status])
+}
+
+// ============= MEDIA MANAGEMENT =============
+
+model Media {
+  id        String    @id @default(cuid())
+  agency    Agency    @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId  String
+  
+  fileName      String
+  originalName  String
+  fileSize      Int
+  mimeType      String
+  url           String
+  
+  metadata      Json?  // width, height, duration, etc.
+  tags          String[]
+  
+  createdAt DateTime @default(now())
+  
+  @@index([agencyId])
+  @@index([mimeType])
+}
+
+// ============= JOB QUEUE =============
+
+model QueueJob {
+  id        String    @id @default(cuid())
+  jobType   String    // 'post', 'analytics_fetch', 'webhook'
+  
+  postId    String?   // if posting
+  data      Json      // job data
+  
+  status    JobStatus @default(PENDING)
+  attempts  Int       @default(0)
+  maxRetries Int     @default(3)
+  
+  error     String?
+  scheduledFor DateTime?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([status])
+  @@index([scheduledFor])
+  @@index([jobType])
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ============= API USAGE & QUOTAS =============
+
+model ApiUsage {
+  id              String    @id @default(cuid())
+  agency          Agency    @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId        String
+  
+  platform        String    // 'instagram', 'tiktok', etc
+  metric          String    // 'api_calls', 'data_fetched_mb', etc
+  
+  count           Int       @default(0)
+  limit           Int
+  
+  resetAt         DateTime
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@unique([agencyId, platform, metric])
+  @@index([agencyId])
+  @@index([platform])
+  @@index([resetAt])
+}
+
+// ============= PLATFORM WEBHOOKS =============
+
+model WebhookEvent {
+  id        String    @id @default(cuid())
+  
+  source    String    // 'instagram', 'tiktok', etc
+  eventType String    // 'comment', 'like', 'share'
+  
+  payload   Json
+  processed Boolean   @default(false)
+  error     String?
+  
+  createdAt DateTime @default(now())
+  
+  @@index([source])
+  @@index([eventType])
+  @@index([processed])
+}
+
+// ============= SUBSCRIPTION TRACKING =============
+
+model AgencySubscription {
+  id          String    @id @default(cuid())
+  agency      Agency    @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId    String    @unique
+  
+  tier        SubscriptionTier
+  status      String    @default("active") // active, cancelled, past_due
+  
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  
+  cancelledAt DateTime?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([agencyId])
+  @@index([status])
+}
+
+
+
+
+
+
+
+
+
+
+
+

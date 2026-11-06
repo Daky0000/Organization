@@ -1,0 +1,29 @@
+// Typechecks the vendored lead-generation module and its host glue.
+//
+// The package's own tsconfig.json cannot compile (TS5110: module ESNext with
+// moduleResolution NodeNext), so `tsc -p tsconfig.json` has never run here —
+// the API is built by esbuild, which strips types without checking them. That
+// is survivable for code written against this repo's own helpers; it is not
+// survivable for 2,600 lines dropped in from another project and talking to a
+// generated Prisma client.
+//
+// Run it after any change to src/server/leads/** or prisma/schema.prisma:
+//
+//   npm run typecheck:leads
+//
+// Widening it to the whole of src/ would surface a large backlog of unrelated
+// pre-existing errors, which is a separate job.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": [
+    "src/server/leads/**/*.ts",
+    "src/server/leads-tenancy.ts",
+    "src/server/leadgenRoutes.ts"
+  ]
+}

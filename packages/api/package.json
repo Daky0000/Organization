@@ -1,0 +1,60 @@
+{
+  "name": "@contentflow/api",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "node ../../scripts/schema-fingerprint.mjs && tsx src/server.ts",
+    "start": "node .railway-build/server.mjs",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "postinstall": "prisma generate --schema prisma/schema.prisma || echo \"skipped prisma generate (no schema or no CLI yet) \u2014 'npm run build' will generate it\"",
+    "typecheck:leads": "tsc -p tsconfig.leads.json",
+    "build": "node ../../scripts/schema-fingerprint.mjs && npm run prisma:generate && npm run typecheck && esbuild src/server.ts --bundle --platform=node --format=esm --packages=external --external:node:* --outfile=.railway-build/server.mjs && node ../../scripts/copy-web-dist-to-api-public.mjs",
+    "test": "node --import tsx --test --test-concurrency=1 --test-isolation=none",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
+    "@google/generative-ai": "^0.24.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@prisma/client": "^5.22.0",
+    "@sentry/node": "^10.65.0",
+    "axios": "^1.20.0",
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^5.71.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "form-data": "^4.0.5",
+    "helmet": "^8.2.0",
+    "ioredis": "^5.7.0",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^10.0.15",
+    "pdfkit": "^0.15.2",
+    "pg": "^8.20.0",
+    "pino": "^9.9.0",
+    "resend": "^6.12.3",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.3.3",
+    "@types/nodemailer": "^8.0.1",
+    "@types/pdfkit": "^0.13.9",
+    "@types/pg": "^8.18.0",
+    "@types/supertest": "^6.0.3",
+    "esbuild": "^0.25.0",
+    "prisma": "^5.22.0",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

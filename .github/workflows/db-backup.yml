@@ -1,0 +1,76 @@
+# Nightly offsite backup of the production Postgres database.
+#
+# REQUIRED SETUP (repo → Settings → Secrets and variables → Actions):
+#   DATABASE_PUBLIC_URL  — Railway Postgres PUBLIC connection URL
+#                          (Railway → Postgres service → Connect → Public Network;
+#                          enable public networking on the DB if it's off)
+#   BACKUP_PASSPHRASE    — a long random string (32+ chars). KEEP A COPY somewhere
+#                          safe outside GitHub: without it, backups cannot be decrypted.
+#
+# This repo is PUBLIC, so the dump is AES-256 encrypted before upload —
+# the artifact is useless without BACKUP_PASSPHRASE.
+#
+# RESTORE (from a downloaded artifact):
+#   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in db-YYYY-MM-DD.dump.enc \
+#     -pass pass:<BACKUP_PASSPHRASE> -out db.dump
+#   pg_restore --clean --if-exists --no-owner --dbname="<target-postgres-url>" db.dump
+#   (restore to a SCRATCH database first — never straight over production)
+
+name: DB Backup
+
+on:
+  schedule:
+    - cron: '17 2 * * *' # nightly 02:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check configuration
+        env:
+          DB_URL: ${{ secrets.DATABASE_PUBLIC_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          if [ -z "$DB_URL" ] || [ -z "$PASSPHRASE" ]; then
+            echo "::error::Backup not configured. Add DATABASE_PUBLIC_URL and BACKUP_PASSPHRASE repo secrets (see header of .github/workflows/db-backup.yml)."
+            exit 1
+          fi
+
+      - name: Dump database (pg_dump 17 via container)
+        env:
+          DB_URL: ${{ secrets.DATABASE_PUBLIC_URL }}
+        run: |
+          case "$DB_URL" in
+            *sslmode=*) DUMP_URL="$DB_URL" ;;
+            *\?*)       DUMP_URL="${DB_URL}&sslmode=require" ;;
+            *)          DUMP_URL="${DB_URL}?sslmode=require" ;;
+          esac
+          docker run --rm -e DUMP_URL="$DUMP_URL" postgres:17-alpine \
+            pg_dump "$DUMP_URL" -Fc --no-owner > db.dump
+          SIZE=$(stat -c%s db.dump)
+          echo "dump size: ${SIZE} bytes"
+          if [ "$SIZE" -lt 51200 ]; then
+            echo "::error::Dump is suspiciously small (<50KB) — treating as failure."
+            exit 1
+          fi
+
+      - name: Encrypt dump
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+            -in db.dump -out "db-$(date -u +%F).dump.enc" -pass env:PASSPHRASE
+          rm -f db.dump
+
+      - name: Upload encrypted backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ github.run_id }}
+          path: db-*.dump.enc
+          retention-days: 30
+          if-no-files-found: error

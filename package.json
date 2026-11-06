@@ -1,0 +1,26 @@
+{
+  "name": "contentflow",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "node scripts/use-source-index.mjs && npm --workspace @contentflow/web run dev",
+    "dev:api": "npm --workspace @contentflow/api run dev",
+    "build": "node scripts/use-source-index.mjs && npm --workspace @contentflow/web run build && npm --workspace @contentflow/api run build",
+    "build:web": "node scripts/use-source-index.mjs && npm --workspace @contentflow/web run build",
+    "build:api": "npm --workspace @contentflow/api run build",
+    "test": "npm --workspace @contentflow/api test"
+  },
+  "devDependencies": {
+    "docx": "^9.6.1",
+    "playwright": "^1.63.0",
+    "typescript": "^5.9.3"
+  }
+}
