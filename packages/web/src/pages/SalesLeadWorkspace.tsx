@@ -89,7 +89,13 @@ function AddLeadForm({ lists, defaultListId, onCreated, onCancel }: {
 }
 
 export default function SalesLeadWorkspace() {
-  const [view, setView] = useState<View>({ kind: 'all' });
+  // ?list=<id> opens that list (used by the AI Agent's "Create call list").
+  const [view, setView] = useState<View>(() => {
+    try {
+      const id = new URLSearchParams(window.location.search).get('list');
+      return id ? { kind: 'list', id } as View : { kind: 'all' };
+    } catch { return { kind: 'all' }; }
+  });
   const [lists, setLists] = useState<LeadList[]>([]);
   const [fields, setFields] = useState<LeadField[]>([]);
   const [leads, setLeads] = useState<WorkspaceLead[]>([]);

@@ -2008,6 +2008,19 @@ export default function ChatWidget() {
   const [input, setInput] = useState('');
   const [attachedImages, setAttachedImages] = useState<AttachedImg[]>([]);
 
+  // The AI Agent page hands creative briefs (posts, images) to this assistant,
+  // which has the creation tools and shows a credit estimate first.
+  useEffect(() => {
+    const onHandoff = (e: Event) => {
+      const msg = (e as CustomEvent<{ message?: string }>).detail?.message;
+      if (typeof msg !== 'string' || !msg.trim()) return;
+      setOpen(true);
+      setInput(msg.slice(0, 4000));
+    };
+    window.addEventListener('agent:open-chat', onHandoff);
+    return () => window.removeEventListener('agent:open-chat', onHandoff);
+  }, []);
+
   // recording: 'idle' | 'recording' | 'pending'
   const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'pending'>('idle');
   const [recordingSeconds, setRecordingSeconds] = useState(0);

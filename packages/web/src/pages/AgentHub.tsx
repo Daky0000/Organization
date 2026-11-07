@@ -1,25 +1,32 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { BookOpen, Sparkles } from 'lucide-react';
+import { BookOpen, Boxes, MessageSquare, Sparkles, Target } from 'lucide-react';
 
+const AgentConsole = lazy(() => import('../components/agent/AgentConsole'));
+const TargetingPanel = lazy(() => import('../components/agent/TargetingPanel'));
+const SkillsPanel = lazy(() => import('../components/agent/SkillsPanel'));
 const CompanyContextEditor = lazy(() => import('../components/agent/CompanyContextEditor'));
 
-type Tab = 'context';
+type Tab = 'ask' | 'targeting' | 'skills' | 'context';
 const TABS: Array<{ id: Tab; label: string; icon: typeof Sparkles }> = [
+  { id: 'ask', label: 'Ask the agent', icon: MessageSquare },
+  { id: 'targeting', label: 'Who to call', icon: Target },
+  { id: 'skills', label: 'Skills', icon: Boxes },
   { id: 'context', label: 'Company context', icon: BookOpen },
 ];
 
-function readTab(): Tab {
+function readParams(): { tab: Tab; event: string | null } {
   try {
-    const t = new URLSearchParams(window.location.search).get('tab');
-    return (TABS.find((x) => x.id === t)?.id ?? TABS[0].id);
-  } catch { return TABS[0].id; }
+    const q = new URLSearchParams(window.location.search);
+    const t = q.get('tab');
+    return { tab: TABS.find((x) => x.id === t)?.id ?? 'ask', event: q.get('event') };
+  } catch { return { tab: 'ask', event: null }; }
 }
 
 export default function AgentHub() {
-  const [tab, setTab] = useState<Tab>(readTab);
+  const [{ tab, event }, setState] = useState(readParams);
 
   useEffect(() => {
-    const onPop = () => setTab(readTab());
+    const onPop = () => setState(readParams());
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
@@ -27,8 +34,9 @@ export default function AgentHub() {
   const go = (t: Tab) => {
     const url = new URL(window.location.href);
     url.searchParams.set('tab', t);
+    url.searchParams.delete('event');
     window.history.pushState({}, document.title, `${url.pathname}${url.search}`);
-    setTab(t);
+    setState({ tab: t, event: null });
   };
 
   return (
@@ -48,6 +56,9 @@ export default function AgentHub() {
         ))}
       </div>
       <Suspense fallback={<div className="h-40 animate-pulse rounded-2xl bg-slate-100" />}>
+        {tab === 'ask' && <AgentConsole />}
+        {tab === 'targeting' && <TargetingPanel key={event ?? 'none'} initialEventId={event} />}
+        {tab === 'skills' && <SkillsPanel />}
         {tab === 'context' && <CompanyContextEditor />}
       </Suspense>
     </div>

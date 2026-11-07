@@ -357,7 +357,7 @@ export async function executeRun(pool: Pool, userId: string, runId: string, isAd
             step.output = [
               `Lead groups for **${ev?.title ?? 'the event'}** (${t.source === 'ai' ? 'chosen by AI' : 'from the event\'s target roles and industries'}; ${t.total_leads} callable leads searched).`,
               t.summary ?? '',
-              ...t.suggestions.map((s, i) => `${i + 1}. **${s.title}** — ${s.lead_ids.length} leads${s.warm_count ? ` (${s.warm_count} warm)` : ''}. Why: ${s.reason}${s.pitch ? ` Pitch: ${s.pitch}` : ''}`),
+              ...t.suggestions.map((s, i) => `${i + 1}. **${s.title}** — ${s.lead_ids.length} lead${s.lead_ids.length === 1 ? '' : 's'}${s.warm_count ? ` (${s.warm_count} warm)` : ''}. Why: ${s.reason}${s.pitch ? ` Pitch: ${s.pitch}` : ''}`),
               t.warning ? `Note: ${t.warning}` : '',
             ].filter(Boolean).join('\n');
           } else {

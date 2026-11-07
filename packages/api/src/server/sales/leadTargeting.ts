@@ -200,10 +200,11 @@ export function ruleSegments(event: Pick<ContextItem, 'title' | 'data' | 'tags'>
   const eventWords = [...(d.target_industries ?? []), ...(d.keywords ?? []), ...(event.tags ?? []), event.title].join(' ').toLowerCase();
   const roleWords = (d.target_roles ?? []).map((r) => r.toLowerCase());
   const specs: SegmentSpec[] = [];
-  const ev = event.title;
+  // Short name for sentences: the title before any bracket or dash.
+  const ev = event.title.split(/\s[(—–-]\s?/)[0].trim() || event.title;
 
   specs.push({
-    name: `Warm leads to invite to ${ev}`,
+    name: 'Warm leads (interested or asked for a call back)',
     reason: 'They already said "interested" or asked for a call back — the quickest registrations.',
     pitch: `Remind them of their interest, tell them about ${ev}${d.start_date ? ` on ${d.start_date}` : ''}, and offer to reserve a seat.`,
     keywords: [...roleWords, ...(d.keywords ?? []), ...(d.target_industries ?? [])],
@@ -217,8 +218,8 @@ export function ruleSegments(event: Pick<ContextItem, 'title' | 'data' | 'tags'>
     if (!overlap) continue;
     specs.push({
       name: dict.label,
-      reason: `${ev} is aimed at ${dict.label.toLowerCase()} — ${overlap} of its target roles or industries match this group.`,
-      pitch: `Open with their role, name a client from their sector, and tie ${ev} to a concrete outcome for their work.`,
+      reason: `${ev} fits ${dict.label.toLowerCase()}: ${overlap} of its target roles or industries are in this group.`,
+      pitch: 'Open with their role, name a client from their sector, and tie the event to one concrete outcome for their work.',
       keywords: dict.words,
       fields: key === 'executive' || key === 'hr' ? ['title', 'list', 'notes'] : ['title', 'company', 'industry', 'list', 'email'],
       priority: key === 'executive' ? 2 : 3,
@@ -226,7 +227,7 @@ export function ruleSegments(event: Pick<ContextItem, 'title' | 'data' | 'tags'>
   }
   if (roleWords.length) {
     specs.push({
-      name: `Job titles that match ${ev}`,
+      name: 'Job titles the event is for',
       reason: `Their job title matches who ${ev} is for: ${(d.target_roles ?? []).slice(0, 6).join(', ')}.`,
       pitch: 'Speak to their role directly and the outcome they will leave with.',
       keywords: roleWords,

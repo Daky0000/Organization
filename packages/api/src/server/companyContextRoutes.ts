@@ -6,6 +6,7 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 import type { Request } from '../types/http.ts';
 import { logger } from '../logger.ts';
+import { invalidateSharedContext } from './agentSharedContext.ts';
 import {
   CONTEXT_KINDS,
   createContextItem,
@@ -75,6 +76,7 @@ export function registerCompanyContextRoutes({ requireAuth, pool }: Deps): Route
     const parsed = itemSchema.safeParse(req.body ?? {});
     if (!parsed.success) return fail(res, 400, parsed.error.issues[0]?.message ?? 'Invalid item');
     try {
+      invalidateSharedContext(auth.userId);
       res.json({ success: true, item: await createContextItem(pool, auth.userId, parsed.data as any) });
     } catch (err) {
       logger.error({ err }, 'company_context_create_failed');
@@ -89,6 +91,7 @@ export function registerCompanyContextRoutes({ requireAuth, pool }: Deps): Route
     if (!parsed.success) return fail(res, 400, parsed.error.issues[0]?.message ?? 'Invalid item');
     try {
       const item = await updateContextItem(pool, auth.userId, req.params.id, parsed.data as any);
+      invalidateSharedContext(auth.userId);
       if (!item) return fail(res, 404, 'Not found');
       res.json({ success: true, item });
     } catch (err) {
@@ -101,6 +104,7 @@ export function registerCompanyContextRoutes({ requireAuth, pool }: Deps): Route
     const auth = requireAuth(req, res);
     if (!auth) return;
     try {
+      invalidateSharedContext(auth.userId);
       if (!(await deleteContextItem(pool, auth.userId, req.params.id))) return fail(res, 404, 'Not found');
       res.json({ success: true });
     } catch (err) {
@@ -114,6 +118,7 @@ export function registerCompanyContextRoutes({ requireAuth, pool }: Deps): Route
     const auth = requireAuth(req, res);
     if (!auth) return;
     try {
+      invalidateSharedContext(auth.userId);
       const added = await seedAfriconContext(pool, auth.userId);
       res.json({ success: true, added, items: await listContextItems(pool, auth.userId) });
     } catch (err) {

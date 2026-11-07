@@ -105,7 +105,8 @@ export function registerOrchestratorRoutes({ requireAuth, pool }: Deps): Router 
       const today = zonedDateKey(Date.now(), await userSalesTimezone(pool, auth.userId));
       const items = (await listContextItems(pool, auth.userId, { activeOnly: true }))
         .filter((i) => (i.kind === 'event' || i.kind === 'program' || i.kind === 'offering') && isUpcoming(i, today))
-        .sort((a, b) => String(a.data.start_date ?? '9999').localeCompare(String(b.data.start_date ?? '9999')));
+        .sort((a, b) => ['event', 'program', 'offering'].indexOf(a.kind) - ['event', 'program', 'offering'].indexOf(b.kind)
+          || String(a.data.start_date ?? '9999').localeCompare(String(b.data.start_date ?? '9999')));
       res.json({ success: true, today, events: items });
     } catch (err) { handle(res, err, 'agent_targeting_events_failed', 'Failed to load events'); }
   });

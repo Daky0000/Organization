@@ -2806,7 +2806,13 @@ export function registerAIChatRoutes({
 
       const orchFastModel = aiCfgOrch.provider === 'google' ? resolveGeminiModel(aiCfgOrch.model) : FAST_MODEL;
 
-      const orchSystemPrompt = `You are a routing assistant for a marketing AI team. Decide if a user message requires a coordinated multi-agent response from specialist agents (Nova=creative director, Sage=strategy analyst, Aria=analytics, Flux=automation) or can be handled directly by the main assistant.
+      // Every agent template is a skill of the one orchestrator; the router may pick any of them.
+      const { rows: skillRows } = await dbQuery(
+        `SELECT agent_key, name, role, icon, color FROM agent_templates WHERE agent_key <> 'daky' ORDER BY agent_key`, [],
+      ).catch(() => ({ rows: [] as any[] }));
+      const skillByKey = new Map<string, any>((skillRows as any[]).map((r) => [r.agent_key, r]));
+      const skillLines = (skillRows as any[]).map((r) => `${r.agent_key}=${r.name} (${r.role})`).join(', ') || 'nova=Nova (creative director), sage=Sage (strategy), aria=Aria (analytics), flux=Flux (automation)';
+      const orchSystemPrompt = `You are the orchestrator's router. Decide if a user message needs a coordinated response from several skills (${skillLines}) or can be handled directly by the main assistant.
 
 Return ONLY valid JSON. No markdown fences, no explanation.
 
@@ -2815,7 +2821,8 @@ If single agent: {"type":"direct"}
 If multi-agent (complex campaign, brand strategy, platform automation, multi-domain analysis): {"type":"plan","summary":"one sentence describing the overall task","agents":[{"key":"nova","name":"Nova","icon":"◉","color":"#EC4899","task":"what Nova should focus on"},{"key":"sage","name":"Sage","icon":"◈","color":"#10B981","task":"..."}]}
 
 Rules:
-- Include only genuinely relevant agents (2-4 max)
+- Include only genuinely relevant skills (2-4 max), by key from the list above
+- Deep sales work (who to call for an event, lead lists, decisions across the business) → direct, and the assistant can point to the AI Agent page
 - Any request to create, write, schedule or generate posts, captions, a content calendar, images or video → direct (only the main assistant can make things)
 - Simple post requests, quick questions, single-domain tasks → direct
 - Brand + strategy + analytics + automation tasks → plan`;
@@ -2831,8 +2838,16 @@ Rules:
       );
       try {
         const parsed = JSON.parse(raw);
-        if (parsed.type === 'plan' && Array.isArray(parsed.agents) && parsed.agents.length >= 2) {
-          return res.json(parsed);
+        if (parsed.type === 'plan' && Array.isArray(parsed.agents)) {
+          // Keep only real skills, with their registered name, icon and colour.
+          const agents = parsed.agents
+            .filter((a: any) => skillByKey.size === 0 || skillByKey.has(String(a?.key)))
+            .slice(0, 4)
+            .map((a: any) => {
+              const sk = skillByKey.get(String(a.key));
+              return sk ? { key: sk.agent_key, name: sk.name, icon: sk.icon, color: sk.color, task: String(a.task ?? '').slice(0, 400) } : a;
+            });
+          if (agents.length >= 2) return res.json({ ...parsed, agents });
         }
       } catch (_err) { /* fall through */ }
       return res.json({ type: 'direct' });

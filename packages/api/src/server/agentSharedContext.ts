@@ -2,7 +2,8 @@ import type { Pool } from 'pg';
 import { getDesignSystem, designSystemBlock } from './designSystem.ts';
 import { loadTaste, tasteBlock } from './imageTaste.ts';
 import { listPreferences, onPreferenceChange, preferencesBlock } from './preferenceMemory.ts';
-import { dbQuery } from '../db.ts';
+import { dbQuery, pool as dbPool } from '../db.ts';
+import { companyContextBlock } from './companyContext.ts';
 import { logger } from '../logger.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,6 +90,13 @@ export async function buildSharedAgentContext(userId: string): Promise<string> {
       [userId]
     );
     if (Number(rows[0]?.n) > 0) parts.push(`Active marketing automations: ${rows[0].n}`);
+  });
+
+  // The company's own facts (offerings, upcoming events, playbook) — editable
+  // under AI Agent → Company context. Summaries only, to keep every prompt small.
+  await safe(async () => {
+    const block = await companyContextBlock(dbPool, userId, new Date().toISOString().slice(0, 10), { maxChars: 5000, detail: 'summary' });
+    if (block) parts.push(`COMPANY CONTEXT (summaries; full details on the AI Agent page):\n${block}`);
   });
 
   // Sales pipeline state — so the marketing/content agents know what sales is
