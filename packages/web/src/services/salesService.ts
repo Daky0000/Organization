@@ -252,7 +252,20 @@ export interface WorkspaceLead {
 }
 
 export interface ImportColumn { index: number; header: string; sample: string[]; suggested: string }
-export interface ImportBlock { index: number; sheet: string; title: string; rowCount: number; columns: ImportColumn[] }
+export interface ImportBlock { index: number; sheet: string; title: string; headerRow: number | null; rows: number[]; rowCount: number; columns: ImportColumn[] }
+export interface ImportSheet { name: string; rowCount: number; selected: boolean; sections: number }
+export interface ImportAnalysis {
+  sheets: ImportSheet[];
+  analyzedBy: 'ai' | 'rules';
+  model: string | null;
+  summary: string | null;
+  blocks: ImportBlock[];
+  warnings: string[];
+}
+export interface ImportCommitBlock {
+  index: number; include: boolean; listName: string; sourceType: ListSourceType; mapping: Record<string, string>;
+  sheet?: string; rows?: number[]; headers?: Record<string, string>;
+}
 export interface ImportSummary {
   created: number; updated: number; unchanged: number; skipped: number; activities: number; lists: string[];
   phoneWarnings: Array<{ list: string; row: number; name: string; raw: string }>;
@@ -640,13 +653,14 @@ export const salesService = {
     return assertSuccess(await api.put<{ success: boolean; error?: string; fields: LeadField[] }>('/api/sales/fields', { fields })).fields;
   },
 
-  async analyzeImport(fileBase64: string, fileName: string) {
-    return assertSuccess(await api.post<{ success: boolean; error?: string; blocks: ImportBlock[]; warnings: string[] }>(
-      '/api/sales/import/analyze', { fileBase64, fileName },
+  /** `useAi` asks the AI to find the lists; `sheets` limits which worksheets are read (all when omitted). */
+  async analyzeImport(fileBase64: string, fileName: string, opts: { useAi?: boolean; sheets?: string[] } = {}) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string } & ImportAnalysis>(
+      '/api/sales/import/analyze', { fileBase64, fileName, ...opts },
     ));
   },
 
-  async commitImport(payload: { fileBase64: string; fileName: string; blocks: Array<{ index: number; include: boolean; listName: string; sourceType: ListSourceType; mapping: Record<string, string> }> }) {
+  async commitImport(payload: { fileBase64: string; fileName: string; blocks: ImportCommitBlock[] }) {
     return assertSuccess(await api.post<{ success: boolean; error?: string } & ImportSummary>('/api/sales/import/commit', payload));
   },
 

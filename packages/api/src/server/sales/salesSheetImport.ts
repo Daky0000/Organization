@@ -22,6 +22,8 @@ import type { Pool } from 'pg';
 import { parseWorkbook, SpreadsheetError, type SheetGrid } from '../leads/services/spreadsheet.ts';
 import { ActivityError, type ResponseStatus } from './leadActivities.ts';
 import { findOrCreateLeadList, slugifyKey, type ListSourceType } from './leadWorkspace.ts';
+import { analyzeSheetsWithAI, NoSheetAnalystError } from './sheetAnalyst.ts';
+import { logger } from '../../logger.ts';
 
 export const MAX_IMPORT_BYTES = 12 * 1024 * 1024;
 
@@ -237,10 +239,43 @@ async function readGrids(fileBase64: string, fileName: string): Promise<SheetGri
   }
 }
 
-export async function analyzeImport(fileBase64: string, fileName: string) {
-  const grids = await readGrids(fileBase64, fileName);
-  const blocks = detectBlocks(grids);
+export interface AnalyzeOptions {
+  userId?: string;
+  /** Ask the AI where the lists are (falls back to the rules when it can't). */
+  useAi?: boolean;
+  /** Worksheets to read. Absent or empty means every worksheet. */
+  sheets?: string[];
+}
+
+export async function analyzeImport(fileBase64: string, fileName: string, opts: AnalyzeOptions = {}) {
+  const all = await readGrids(fileBase64, fileName);
+  const wanted = opts.sheets?.length ? new Set(opts.sheets) : null;
+  const grids = wanted ? all.filter((g) => wanted.has(g.name)) : all;
+  if (wanted && !grids.length) throw new ActivityError(400, 'None of the chosen worksheets are in the file');
   const warnings: string[] = [];
+
+  let blocks = detectBlocks(grids);
+  let analyzedBy: 'ai' | 'rules' = 'rules';
+  let model: string | null = null;
+  let aiSummary: string | null = null;
+  if (opts.useAi && opts.userId && grids.length) {
+    try {
+      const ai = await analyzeSheetsWithAI(opts.userId, grids, blocks);
+      blocks = ai.blocks;
+      analyzedBy = 'ai';
+      model = ai.model;
+      aiSummary = ai.summary || null;
+      warnings.push(...ai.repairs);
+    } catch (err) {
+      if (err instanceof NoSheetAnalystError) {
+        warnings.push(err.message);
+      } else {
+        logger.warn({ err: err instanceof Error ? err.message : err }, 'sales_sheet_analyst_failed');
+        warnings.push(`The AI could not read the sheet (${err instanceof Error ? err.message : 'unknown error'}), so the pattern rules were used.`);
+      }
+    }
+  }
+
   for (const g of grids) if (g.truncated) warnings.push(`Sheet "${g.name}" has more than 5,000 rows; only the first 5,000 are read.`);
   let scientific = 0;
   for (const b of blocks) {
@@ -251,10 +286,20 @@ export async function analyzeImport(fileBase64: string, fileName: string) {
   if (scientific) {
     warnings.push(`${scientific} phone number${scientific === 1 ? ' was' : 's were'} saved by the spreadsheet as "2.33241E+11"-style numbers, which have lost their last digits. They will be left blank — export the sheet as .xlsx, or format the phone column as text, to keep them.`);
   }
-  if (!blocks.length) warnings.push('No rows with an email or phone number were found.');
+  if (!blocks.length) warnings.push('No lists of people were found.');
   return {
+    // Every worksheet in the file, so the user can choose which to read.
+    sheets: all.map((g) => ({
+      name: g.name,
+      rowCount: g.rows.filter((r) => r.some((c) => c.trim())).length,
+      selected: !wanted || wanted.has(g.name),
+      sections: blocks.filter((b) => b.sheet === g.name).length,
+    })),
+    analyzedBy,
+    model,
+    summary: aiSummary,
     blocks: blocks.map((b) => ({
-      index: b.index, sheet: b.sheet, title: b.title, rowCount: b.rows.length, columns: b.columns,
+      index: b.index, sheet: b.sheet, title: b.title, headerRow: b.headerRow, rows: b.rows, rowCount: b.rows.length, columns: b.columns,
     })),
     warnings,
   };
@@ -266,6 +311,28 @@ export interface CommitBlock {
   listName: string;
   sourceType: ListSourceType;
   mapping: Record<string, ColumnTarget>; // column index → target
+  /**
+   * The section as analyse returned it. Sent back because an AI reading is
+   * not repeatable — re-detecting on commit could land on different rows.
+   * Absent means "re-run the pattern rules and take block `index`".
+   */
+  sheet?: string;
+  rows?: number[];
+  headers?: Record<string, string>;
+}
+
+interface ResolvedBlock { sheet: string; rows: number[]; headerOf: (col: number) => string }
+
+function resolveBlock(cb: CommitBlock, grids: SheetGrid[], detected: () => ImportBlock[]): ResolvedBlock {
+  if (cb.sheet !== undefined && cb.rows) {
+    const grid = grids.find((g) => g.name === cb.sheet);
+    if (!grid) throw new ActivityError(400, `Worksheet "${cb.sheet}" is not in the file — analyse it again`);
+    const rows = [...new Set(cb.rows)].filter((r) => Number.isInteger(r) && r >= 0 && r < grid.rows.length).sort((a, b) => a - b);
+    return { sheet: grid.name, rows, headerOf: (col) => cb.headers?.[String(col)] ?? '' };
+  }
+  const block = detected()[cb.index];
+  if (!block) throw new ActivityError(400, `Block ${cb.index} no longer matches the file — analyse it again`);
+  return { sheet: block.sheet, rows: block.rows, headerOf: (col) => block.columns.find((c) => c.index === col)?.header ?? '' };
 }
 
 function splitName(full: string): { first: string | null; last: string | null } {
@@ -276,19 +343,21 @@ function splitName(full: string): { first: string | null; last: string | null } 
 
 export async function commitImport(pool: Pool, userId: string, input: { fileBase64: string; fileName: string; blocks: CommitBlock[] }) {
   const grids = await readGrids(input.fileBase64, input.fileName);
-  const detected = detectBlocks(grids);
+  let cached: ImportBlock[] | null = null;
+  const detected = () => (cached ??= detectBlocks(grids));
+  const resolved = new Map<CommitBlock, ResolvedBlock>();
+  for (const cb of input.blocks.filter((b) => b.include)) resolved.set(cb, resolveBlock(cb, grids, detected));
   const summary = { created: 0, updated: 0, unchanged: 0, skipped: 0, activities: 0, lists: [] as string[], phoneWarnings: [] as Array<{ list: string; row: number; name: string; raw: string }> };
 
   // Custom columns referenced by any mapping must exist first.
   const customLabels = new Map<string, string>();
   for (const cb of input.blocks.filter((b) => b.include)) {
-    const block = detected[cb.index];
-    if (!block) throw new ActivityError(400, `Block ${cb.index} no longer matches the file — analyse it again`);
+    const block = resolved.get(cb)!;
     for (const [col, target] of Object.entries(cb.mapping)) {
       if (target.startsWith('custom:')) {
         const key = target.slice(7);
         if (!/^[a-z_][a-z0-9_]{0,39}$/.test(key)) throw new ActivityError(400, `Invalid column key "${key}"`);
-        customLabels.set(key, block.columns.find((c) => c.index === Number(col))?.header || key);
+        if (!customLabels.has(key)) customLabels.set(key, block.headerOf(Number(col)) || key.replace(/_/g, ' '));
       }
     }
   }
@@ -305,9 +374,9 @@ export async function commitImport(pool: Pool, userId: string, input: { fileBase
   }
 
   for (const cb of input.blocks.filter((b) => b.include)) {
-    const block = detected[cb.index];
+    const block = resolved.get(cb)!;
     const grid = grids.find((g) => g.name === block.sheet)!;
-    const listName = cb.listName.trim().slice(0, 120) || block.title;
+    const listName = cb.listName.trim().slice(0, 120) || block.sheet;
     const col = (t: ColumnTarget) => Object.entries(cb.mapping).find(([, v]) => v === t)?.[0];
     const iFull = col('full_name'); const iFirst = col('first_name'); const iLast = col('last_name');
     const iEmail = col('email'); const iPhone = col('phone');
@@ -321,7 +390,8 @@ export async function commitImport(pool: Pool, userId: string, input: { fileBase
     try {
       await client.query('BEGIN');
       const list = await findOrCreateLeadList(client, userId, listName, cb.sourceType);
-      summary.lists.push(list.name);
+      // Several sections can share one list (grouped by worksheet, or all in one).
+      if (!summary.lists.includes(list.name)) summary.lists.push(list.name);
       const maxRound = rounds.reduce((m, r) => Math.max(m, r.round), 0);
       const baseTime = Date.now();
 

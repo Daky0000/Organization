@@ -149,7 +149,16 @@ const importCommitSchema = importFileSchema.extend({
     listName: z.string().max(120),
     sourceType: z.enum(LIST_SOURCE_TYPES),
     mapping: z.record(z.string().regex(/^\d{1,2}$/), columnTarget),
+    // The section as analyse returned it (AI readings are not repeatable).
+    sheet: z.string().max(200).optional(),
+    rows: z.array(z.number().int().min(0).max(100_000)).max(5_000).optional(),
+    headers: z.record(z.string().regex(/^\d{1,2}$/), z.string().max(200)).optional(),
   })).min(1).max(100),
+});
+
+const importAnalyzeSchema = importFileSchema.extend({
+  useAi: z.boolean().optional(),
+  sheets: z.array(z.string().max(200)).max(100).optional(),
 });
 
 const settingsSchema = z.object({
@@ -496,10 +505,10 @@ export function registerSalesLeadsRoutes({ requireAuth, pool }: Deps): Router {
   router.post('/import/analyze', async (req, res) => {
     const auth = requireAuth(req, res);
     if (!auth) return;
-    const b = parseBody(importFileSchema, req, res);
+    const b = parseBody(importAnalyzeSchema, req, res);
     if (!b) return;
     try {
-      res.json({ success: true, ...(await analyzeImport(b.fileBase64, b.fileName)) });
+      res.json({ success: true, ...(await analyzeImport(b.fileBase64, b.fileName, { userId: auth.userId, useAi: b.useAi, sheets: b.sheets })) });
     } catch (err) {
       handle(res, err, 'sales_import_analyze_failed', 'Could not read that file');
     }
