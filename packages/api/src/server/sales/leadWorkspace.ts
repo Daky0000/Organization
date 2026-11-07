@@ -147,6 +147,35 @@ export async function getLeadFields(pool: Pool | PoolClient, userId: string): Pr
   return fields.sort((a, b) => a.position - b.position);
 }
 
+/**
+ * The custom column keys a list's table should show. Columns are one set per
+ * user, so importing a workbook whose sheets have different headers would
+ * otherwise give every sheet's list every sheet's columns. A list shows the
+ * custom columns at least one of its members has a value in, plus columns no
+ * lead has a value in yet (a freshly added column must stay visible so it can
+ * be filled in).
+ */
+export async function listFieldKeys(pool: Pool, userId: string, listId: string): Promise<string[]> {
+  await assertOwnedList(pool, userId, listId);
+  const { rows } = await pool.query(
+    `SELECT f.key FROM sales_lead_fields f
+      WHERE f.user_id=$1 AND f.builtin=false
+        AND (
+          EXISTS (
+            SELECT 1 FROM sales_lead_list_members m
+              JOIN sales_lead_profiles p ON p.contact_id=m.contact_id AND p.user_id=$1
+             WHERE m.list_id=$2 AND COALESCE(p.custom_data->>f.key, '') <> ''
+          )
+          OR NOT EXISTS (
+            SELECT 1 FROM sales_lead_profiles p
+             WHERE p.user_id=$1 AND COALESCE(p.custom_data->>f.key, '') <> ''
+          )
+        )`,
+    [userId, listId],
+  );
+  return rows.map((r) => r.key as string);
+}
+
 export interface FieldInput {
   key?: string | null;
   label: string;
@@ -294,6 +323,43 @@ export async function deleteLeadList(pool: Pool, userId: string, id: string) {
   // Leads stay; only the grouping goes.
   const { rowCount } = await pool.query(`DELETE FROM sales_lead_lists WHERE id=$1 AND user_id=$2`, [id, userId]);
   if (!rowCount) throw new ActivityError(404, 'List not found');
+}
+
+/**
+ * Deletes several lists at once. With `deleteLeads`, the leads in them go too —
+ * but only leads that belong to no other list, so a lead shared with a list
+ * that is staying is never lost.
+ */
+export async function deleteLeadLists(pool: Pool, userId: string, ids: string[], deleteLeads: boolean) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: owned } = await client.query(
+      `SELECT id FROM sales_lead_lists WHERE user_id=$1 AND id = ANY($2::text[])`, [userId, ids.slice(0, 200)],
+    );
+    const listIds = owned.map((r) => r.id as string);
+    if (!listIds.length) throw new ActivityError(404, 'No matching lists');
+
+    let leadsDeleted = 0;
+    if (deleteLeads) {
+      const r = await client.query(
+        `DELETE FROM mailing_contacts c
+          WHERE c.user_id=$1
+            AND EXISTS (SELECT 1 FROM sales_lead_list_members m WHERE m.contact_id=c.id AND m.list_id = ANY($2::text[]))
+            AND NOT EXISTS (SELECT 1 FROM sales_lead_list_members m WHERE m.contact_id=c.id AND NOT (m.list_id = ANY($2::text[])))`,
+        [userId, listIds],
+      );
+      leadsDeleted = r.rowCount ?? 0;
+    }
+    await client.query(`DELETE FROM sales_lead_lists WHERE user_id=$1 AND id = ANY($2::text[])`, [userId, listIds]);
+    await client.query('COMMIT');
+    return { listsDeleted: listIds.length, leadsDeleted };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function ownedContactIds(pool: Pool | PoolClient, userId: string, ids: string[]): Promise<string[]> {

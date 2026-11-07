@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlarmClock, AlertTriangle, Columns, FolderPlus, Inbox, Layers, Loader2, Pencil, Plus, Search, Sparkles,
+  AlarmClock, AlertTriangle, CheckSquare, Columns, FolderPlus, Inbox, Layers, Loader2, Pencil, Plus, Search, Sparkles,
   Trash2, Upload, UserPlus, Users, X,
 } from 'lucide-react';
 import {
@@ -88,6 +88,49 @@ function AddLeadForm({ lists, defaultListId, onCreated, onCancel }: {
   );
 }
 
+function DeleteListsDialog({ lists, onCancel, onConfirm }: {
+  lists: LeadList[];
+  onCancel: () => void;
+  onConfirm: (deleteLeads: boolean) => Promise<void>;
+}) {
+  const [deleteLeads, setDeleteLeads] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const count = lists.length;
+  const leadTotal = lists.reduce((sum, l) => sum + (l.lead_count ?? 0), 0);
+  const go = async () => {
+    setBusy(true);
+    try { await onConfirm(deleteLeads); } finally { setBusy(false); }
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" role="dialog" aria-modal="true" aria-labelledby="delete-lists-title">
+      <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-xl">
+        <h2 id="delete-lists-title" className="text-lg font-bold text-slate-900">
+          Delete {count} list{count === 1 ? '' : 's'}?
+        </h2>
+        <ul className="max-h-40 space-y-0.5 overflow-y-auto text-sm text-slate-600">
+          {lists.map((l) => <li key={l.id} className="truncate">· {l.name} <span className="text-slate-400">({l.lead_count})</span></li>)}
+        </ul>
+        <label className="flex items-start gap-2 rounded-xl border border-slate-200 p-3 text-sm text-slate-700">
+          <input type="checkbox" checked={deleteLeads} onChange={(e) => setDeleteLeads(e.target.checked)} className="mt-0.5" />
+          <span>
+            Also delete the leads in {count === 1 ? 'this list' : 'these lists'} ({leadTotal})
+            <span className="block text-xs text-slate-500">Leads that are also in another list are kept. Deleted leads lose their activity and reminders, and this cannot be undone.</span>
+          </span>
+        </label>
+        {!deleteLeads && <p className="text-xs text-slate-500">The leads stay and are still under All leads.</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={busy} className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">Cancel</button>
+          <button type="button" onClick={() => void go()} disabled={busy}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60">
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            {deleteLeads ? 'Delete lists and leads' : 'Delete lists'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SalesLeadWorkspace() {
   const [view, setView] = useState<View>({ kind: 'all' });
   const [lists, setLists] = useState<LeadList[]>([]);
@@ -108,6 +151,9 @@ export default function SalesLeadWorkspace() {
   const [newList, setNewList] = useState(false);
   const [adding, setAdding] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [selectingLists, setSelectingLists] = useState(false);
+  const [pickedLists, setPickedLists] = useState<Set<string>>(new Set());
+  const [confirmListDelete, setConfirmListDelete] = useState(false);
 
   const loadMeta = useCallback(async () => {
     try {
@@ -151,6 +197,26 @@ export default function SalesLeadWorkspace() {
   }, [load, search]);
   useEffect(() => { setSelected(new Set()); }, [query]);
 
+  // Columns are one set per user; a list's table only shows the custom columns
+  // its own leads use, so sheets imported from one workbook don't share headers.
+  const viewListId = view.kind === 'list' ? view.id : null;
+  const [listKeys, setListKeys] = useState<{ listId: string; keys: Set<string> } | null>(null);
+  const loadListKeys = useCallback(async () => {
+    if (!viewListId) { setListKeys(null); return; }
+    try {
+      const keys = await salesService.getListFieldKeys(viewListId);
+      setListKeys({ listId: viewListId, keys: new Set(keys) });
+    } catch {
+      setListKeys(null); // fall back to every column rather than hiding data
+    }
+  }, [viewListId]);
+  useEffect(() => { void loadListKeys(); }, [loadListKeys, fields]);
+  const tableFields = useMemo(() => (
+    listKeys && listKeys.listId === viewListId
+      ? fields.filter((f) => f.builtin || listKeys.keys.has(f.key))
+      : fields
+  ), [fields, listKeys, viewListId]);
+
   const refresh = () => { void load(false); void loadMeta(); };
 
   const saveCell = async (lead: WorkspaceLead, patch: Record<string, unknown>) => {
@@ -191,6 +257,27 @@ export default function SalesLeadWorkspace() {
     catch (err) { setError(err instanceof Error ? err.message : 'Failed to delete list'); }
   };
 
+  const stopSelectingLists = () => { setSelectingLists(false); setPickedLists(new Set()); };
+  const togglePickedList = (id: string) => setPickedLists((s) => {
+    const n = new Set(s);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
+  const visibleLists = lists.filter((l) => !l.archived_at);
+  const removeLists = async (deleteLeads: boolean) => {
+    const ids = [...pickedLists];
+    try {
+      await salesService.deleteLeadLists(ids, deleteLeads);
+      setConfirmListDelete(false);
+      stopSelectingLists();
+      if (view.kind === 'list' && ids.includes(view.id)) setView({ kind: 'all' });
+      refresh();
+    } catch (err) {
+      setConfirmListDelete(false);
+      setError(err instanceof Error ? err.message : 'Failed to delete lists');
+    }
+  };
+
   const railBtn = (active: boolean) =>
     `flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm ${active ? 'bg-blue-50 font-semibold text-blue-700' : 'text-slate-600 hover:bg-slate-100'}`;
 
@@ -211,13 +298,42 @@ export default function SalesLeadWorkspace() {
         <div>
           <div className="mb-1 flex items-center justify-between px-2.5">
             <span className="text-xs font-bold uppercase tracking-wide text-slate-400">Lists</span>
-            <button type="button" onClick={() => setNewList(true)} title="New list" className="text-slate-400 hover:text-blue-600"><FolderPlus size={15} /></button>
+            {selectingLists ? (
+              <button type="button" onClick={stopSelectingLists} className="text-xs font-semibold text-slate-500 hover:text-slate-800">Done</button>
+            ) : (
+              <span className="flex items-center gap-2">
+                {visibleLists.length > 0 && (
+                  <button type="button" onClick={() => setSelectingLists(true)} title="Select lists" className="text-slate-400 hover:text-blue-600"><CheckSquare size={15} /></button>
+                )}
+                <button type="button" onClick={() => setNewList(true)} title="New list" className="text-slate-400 hover:text-blue-600"><FolderPlus size={15} /></button>
+              </span>
+            )}
           </div>
+          {selectingLists && (
+            <div className="mb-1.5 flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs">
+              <label className="flex items-center gap-1.5 text-slate-600">
+                <input type="checkbox"
+                  checked={pickedLists.size > 0 && pickedLists.size === visibleLists.length}
+                  onChange={(e) => setPickedLists(e.target.checked ? new Set(visibleLists.map((l) => l.id)) : new Set())} />
+                {pickedLists.size ? `${pickedLists.size} selected` : 'Select all'}
+              </label>
+              <button type="button" disabled={!pickedLists.size} onClick={() => setConfirmListDelete(true)}
+                className="inline-flex items-center gap-1 font-semibold text-rose-600 disabled:text-slate-300">
+                <Trash2 size={12} /> Delete
+              </button>
+            </div>
+          )}
           {newList && <NewListForm onCreated={(l) => { setNewList(false); void loadMeta(); setView({ kind: 'list', id: l.id }); }} onCancel={() => setNewList(false)} />}
           <div className="space-y-0.5">
             {lists.filter((l) => !l.archived_at).map((l) => (
               <div key={l.id} className="group relative">
-                {renaming === l.id ? (
+                {selectingLists ? (
+                  <label className={`${railBtn(pickedLists.has(l.id))} cursor-pointer`}>
+                    <input type="checkbox" checked={pickedLists.has(l.id)} onChange={() => togglePickedList(l.id)} className="shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">{l.name}</span>
+                    <span className="text-xs text-slate-400">{l.lead_count}</span>
+                  </label>
+                ) : renaming === l.id ? (
                   <input autoFocus defaultValue={l.name} onBlur={(e) => void renameList(l.id, e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') void renameList(l.id, (e.target as HTMLInputElement).value); if (e.key === 'Escape') setRenaming(null); }}
                     className="w-full rounded-lg border border-blue-300 px-2 py-1 text-sm" />
@@ -228,7 +344,7 @@ export default function SalesLeadWorkspace() {
                     <span className="text-xs text-slate-400 group-hover:hidden">{l.lead_count}</span>
                   </button>
                 )}
-                {renaming !== l.id && (
+                {!selectingLists && renaming !== l.id && (
                   <span className="absolute right-1.5 top-1.5 hidden gap-1 group-hover:flex">
                     <button type="button" onClick={() => setRenaming(l.id)} title="Rename" className="text-slate-400 hover:text-slate-700"><Pencil size={13} /></button>
                     <button type="button" onClick={() => void removeList(l)} title="Delete list" className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
@@ -344,7 +460,7 @@ export default function SalesLeadWorkspace() {
           </div>
         ) : (
           <LeadGrid
-            leads={leads} fields={fields} selected={selected} groupBy={groupBy}
+            leads={leads} fields={tableFields} selected={selected} groupBy={groupBy}
             onToggle={(id) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; })}
             onToggleAll={(ids, on) => setSelected(on ? new Set(ids) : new Set())}
             onOpen={(id) => setOpenLead(id)}
@@ -365,6 +481,13 @@ export default function SalesLeadWorkspace() {
       {openLead && (
         <LeadDrawer contactId={openLead} fields={fields} lists={lists}
           onClose={() => setOpenLead(null)} onChanged={() => void load(false)} />
+      )}
+      {confirmListDelete && (
+        <DeleteListsDialog
+          lists={visibleLists.filter((l) => pickedLists.has(l.id))}
+          onCancel={() => setConfirmListDelete(false)}
+          onConfirm={(deleteLeads) => removeLists(deleteLeads)}
+        />
       )}
       <ColumnManager open={showColumns} fields={fields} onClose={() => setShowColumns(false)} onSaved={(f) => { setFields(f); void load(false); }} />
       {showImport && (

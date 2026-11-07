@@ -33,10 +33,12 @@ import {
   createLeadList,
   createWorkspaceLead,
   deleteLeadList,
+  deleteLeadLists,
   FIELD_TYPES,
   getLeadFields,
   getWorkspaceLead,
   LIST_SOURCE_TYPES,
+  listFieldKeys,
   listLeadLists,
   putLeadFields,
   queryLeads,
@@ -117,6 +119,11 @@ const listPatchSchema = z.object({
   source_type: z.enum(LIST_SOURCE_TYPES).optional(),
   color: z.string().max(20).nullish(),
   archived: z.boolean().optional(),
+});
+
+const listBulkDeleteSchema = z.object({
+  ids: z.array(z.string().max(64)).min(1, 'Select at least one list').max(200),
+  deleteLeads: z.boolean().optional(),
 });
 
 const membersSchema = z.object({
@@ -461,6 +468,29 @@ export function registerSalesLeadsRoutes({ requireAuth, pool }: Deps): Router {
       res.json({ success: true });
     } catch (err) {
       handle(res, err, 'sales_list_delete_failed', 'Failed to delete list');
+    }
+  });
+
+  // Literal path: registered before /lists/:id so "bulk-delete" is never read as an id.
+  router.post('/lists/bulk-delete', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    const b = parseBody(listBulkDeleteSchema, req, res);
+    if (!b) return;
+    try {
+      res.json({ success: true, ...(await deleteLeadLists(pool, auth.userId, b.ids, b.deleteLeads ?? false)) });
+    } catch (err) {
+      handle(res, err, 'sales_lists_bulk_delete_failed', 'Failed to delete lists');
+    }
+  });
+
+  router.get('/lists/:id/fields', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      res.json({ success: true, keys: await listFieldKeys(pool, auth.userId, req.params.id) });
+    } catch (err) {
+      handle(res, err, 'sales_list_fields_failed', 'Failed to load list columns');
     }
   });
 

@@ -641,12 +641,24 @@ export const salesService = {
     assertSuccess(await api.del<{ success: boolean; error?: string }>(`/api/sales/lists/${id}`));
   },
 
+  /** Deletes several lists; with deleteLeads, also the leads that are in no other list. */
+  async deleteLeadLists(ids: string[], deleteLeads: boolean) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; listsDeleted: number; leadsDeleted: number }>(
+      '/api/sales/lists/bulk-delete', { ids, deleteLeads },
+    ));
+  },
+
   async changeListMembers(id: string, payload: { add?: string[]; remove?: string[] }) {
     return assertSuccess(await api.post<{ success: boolean; error?: string; added: number; removed: number }>(`/api/sales/lists/${id}/members`, payload));
   },
 
   async getLeadFields() {
     return assertSuccess(await api.get<{ success: boolean; error?: string; fields: LeadField[] }>('/api/sales/fields')).fields;
+  },
+
+  /** Custom column keys that belong in this list's table (see listFieldKeys on the server). */
+  async getListFieldKeys(listId: string) {
+    return assertSuccess(await api.get<{ success: boolean; error?: string; keys: string[] }>(`/api/sales/lists/${listId}/fields`)).keys;
   },
 
   async saveLeadFields(fields: Array<Pick<LeadField, 'label' | 'type'> & { key?: string | null; options?: string[] | null; width?: number | null; hidden?: boolean }>) {
