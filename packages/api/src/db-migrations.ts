@@ -4959,6 +4959,20 @@ async function createSalesLeadWorkspaceTables(pool: Pool): Promise<void> {
       UNIQUE (user_id, key)
     )`);
 
+  // Today's plan: call target + the stored AI to-do list (one per user per local day).
+  await step('users.daily_call_target', `ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_call_target INT`);
+  await step('sales_daily_plans', `
+    CREATE TABLE IF NOT EXISTS sales_daily_plans (
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      plan_date  DATE NOT NULL,
+      source     TEXT NOT NULL DEFAULT 'rules' CHECK (source IN ('ai','rules')),
+      model      TEXT,
+      plan       JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, plan_date)
+    )`);
+
   // One digest per user per local day; the row is the claim.
   await step('sales_digest_log', `
     CREATE TABLE IF NOT EXISTS sales_digest_log (

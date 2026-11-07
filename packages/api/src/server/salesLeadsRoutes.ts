@@ -46,6 +46,15 @@ import {
 } from './sales/leadWorkspace.ts';
 import { analyzeImport, commitImport, type ColumnTarget } from './sales/salesSheetImport.ts';
 import { leadOverview } from './sales/leadOverview.ts';
+import {
+  generateDailyPlan,
+  getStoredPlan,
+  MAX_DAILY_CALL_TARGET,
+  retryActivityReads,
+  setDailyCallTarget,
+  setPlanTaskDone,
+  todaySnapshot,
+} from './sales/dailyPlan.ts';
 
 interface Deps {
   requireAuth: (req: Request, res: Response) => { userId: string } | null;
@@ -538,6 +547,68 @@ export function registerSalesLeadsRoutes({ requireAuth, pool }: Deps): Router {
       res.json({ success: true, ...(await leadOverview(pool, auth.userId)) });
     } catch (err) {
       handle(res, err, 'sales_overview_failed', 'Failed to load overview');
+    }
+  });
+
+  // ─── Today: call queue, call target, AI to-do list ────────────────────────
+
+  router.get('/workspace/today', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      const snapshot = await todaySnapshot(pool, auth.userId);
+      const plan = await getStoredPlan(pool, auth.userId, snapshot.date);
+      res.json({ success: true, ...snapshot, plan });
+    } catch (err) {
+      handle(res, err, 'sales_today_failed', "Failed to load today's plan");
+    }
+  });
+
+  router.post('/workspace/today/plan', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      res.json({ success: true, plan: await generateDailyPlan(pool, auth.userId) });
+    } catch (err) {
+      handle(res, err, 'sales_today_plan_failed', 'Failed to write the plan');
+    }
+  });
+
+  router.patch('/workspace/today/plan/tasks/:index', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    const b = parseBody(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), done: z.boolean() }), req, res);
+    if (!b) return;
+    const index = Number(req.params.index);
+    if (!Number.isInteger(index) || index < 0 || index > 50) return fail(res, 400, 'Invalid task');
+    try {
+      const plan = await setPlanTaskDone(pool, auth.userId, b.date, index, b.done);
+      if (!plan) return fail(res, 404, 'Task not found');
+      res.json({ success: true, plan });
+    } catch (err) {
+      handle(res, err, 'sales_today_task_failed', 'Failed to update the task');
+    }
+  });
+
+  router.put('/workspace/today/target', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    const b = parseBody(z.object({ target: z.number().int().min(1).max(MAX_DAILY_CALL_TARGET) }), req, res);
+    if (!b) return;
+    try {
+      res.json({ success: true, target: await setDailyCallTarget(pool, auth.userId, b.target) });
+    } catch (err) {
+      handle(res, err, 'sales_today_target_failed', 'Failed to save the call target');
+    }
+  });
+
+  router.post('/workspace/today/retry-ai', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      res.json({ success: true, queued: await retryActivityReads(pool, auth.userId) });
+    } catch (err) {
+      handle(res, err, 'sales_today_retry_ai_failed', 'Failed to queue the notes');
     }
   });
 

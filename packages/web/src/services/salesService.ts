@@ -281,6 +281,61 @@ export interface LeadOverview {
   activityTrend30d: Array<{ day: string; activities: number; responses: number }>;
 }
 
+export const QUEUE_REASONS = [
+  'overdue', 'due_today', 'call_back', 'interested', 'payment', 'no_answer', 'unreachable', 'stale', 'new',
+] as const;
+export type QueueReason = (typeof QUEUE_REASONS)[number];
+
+export interface QueueItem {
+  contact_id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  lists: string[];
+  reason: QueueReason;
+  detail: string;
+  last_status: ResponseStatus | null;
+  last_activity_at: string | null;
+  last_note: string | null;
+  next_round: number;
+  attempts: number;
+  followup: { id: string; at: string; reason: string | null; channel: ReminderChannel | null; needs_confirmation: boolean } | null;
+}
+
+export interface PlanTask {
+  title: string;
+  detail: string;
+  priority: 'high' | 'medium' | 'low';
+  category: 'follow_up' | 'calls' | 'pipeline' | 'list' | 'admin';
+  bucket: QueueReason | null;
+  lead_ids: string[];
+  target_count: number | null;
+  done: boolean;
+}
+
+export interface DailyPlan {
+  date: string;
+  source: 'ai' | 'rules';
+  model: string | null;
+  headline: string;
+  tasks: PlanTask[];
+  tips: string[];
+  warning: string | null;
+  generated_at: string;
+}
+
+export interface SalesToday {
+  date: string;
+  timezone: string;
+  target: number;
+  progress: { calls: number; touches: number; responses: number; conversions: number; leads_reached: number; remaining: number };
+  counts: Record<QueueReason, number> & { needs_confirmation: number; total: number };
+  queue: QueueItem[];
+  buckets: Record<QueueReason, QueueItem[]>;
+  ai: { available: boolean; notes_waiting: number; notes_failed: number; notes_skipped: number };
+  plan: DailyPlan | null;
+}
+
 let timezoneSync: Promise<void> | null = null;
 
 export function browserTimezone(): string | null {
@@ -666,6 +721,28 @@ export const salesService = {
 
   async getLeadOverview() {
     return assertSuccess(await api.get<{ success: boolean; error?: string } & LeadOverview>('/api/sales/workspace/overview'));
+  },
+
+  async getToday() {
+    return assertSuccess(await api.get<{ success: boolean; error?: string } & SalesToday>('/api/sales/workspace/today'));
+  },
+
+  /** Writes (or rewrites) today's to-do list with the AI; falls back to rules server-side. */
+  async generateDailyPlan() {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; plan: DailyPlan }>('/api/sales/workspace/today/plan')).plan;
+  },
+
+  async setPlanTaskDone(date: string, index: number, done: boolean) {
+    return assertSuccess(await api.patch<{ success: boolean; error?: string; plan: DailyPlan }>(`/api/sales/workspace/today/plan/tasks/${index}`, { date, done })).plan;
+  },
+
+  async setDailyCallTarget(target: number) {
+    return assertSuccess(await api.put<{ success: boolean; error?: string; target: number }>('/api/sales/workspace/today/target', { target })).target;
+  },
+
+  /** Re-queues notes the AI reader failed on or skipped (last 14 days). */
+  async retryAiReads() {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; queued: number }>('/api/sales/workspace/today/retry-ai')).queued;
   },
 
   /** Saves the browser's timezone once, if the user has never set one. Never throws. */
