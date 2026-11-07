@@ -59,6 +59,8 @@ const VerifyEmail = lazy(() => import('./pages/VerifyEmail'));
 const PostAutomation = lazy(() => import('./pages/PostAutomation'));
 const MarketingOverview = lazy(() => import('./pages/MarketingOverview'));
 const SalesLeads = lazy(() => import('./pages/SalesLeads'));
+const SalesLeadWorkspace = lazy(() => import('./pages/SalesLeadWorkspace'));
+const SalesOverview = lazy(() => import('./pages/SalesOverview'));
 const SalesConversations = lazy(() => import('./pages/SalesConversations'));
 const SalesFollowUps = lazy(() => import('./pages/SalesFollowUps'));
 const SalesIntelligence = lazy(() => import('./pages/SalesIntelligence'));
@@ -107,7 +109,9 @@ export type PageType =
   | 'memory'
   | 'integrations'
   | 'marketing'
+  | 'sales-overview'
   | 'sales-leads'
+  | 'sales-ai-calling'
   | 'sales-conversations'
   | 'sales-followups'
   | 'sales-intelligence'
@@ -149,7 +153,9 @@ const PAGE_PATHS: Record<PageType, string> = {
   memory: '/memory',
   integrations: '/integrations',
   marketing: '/marketing',
+  'sales-overview': '/sales/overview',
   'sales-leads': '/sales/leads',
+  'sales-ai-calling': '/sales/ai-calling',
   'sales-conversations': '/sales/conversations',
   'sales-followups': '/sales/followups',
   'sales-intelligence': '/sales/intelligence',
@@ -178,7 +184,9 @@ const PAGE_TITLES: Record<PageType, string> = {
   memory: 'Brand Memory',
   integrations: 'Integrations',
   marketing: 'Marketing Overview',
-  'sales-leads': 'Sales Leads',
+  'sales-overview': 'Sales Overview',
+  'sales-leads': 'Leads',
+  'sales-ai-calling': 'AI Calling',
   'sales-conversations': 'Sales Conversations',
   'sales-followups': 'Follow-ups',
   'sales-intelligence': 'Sales Intelligence',
@@ -205,7 +213,7 @@ const MARKETING_PAGES: PageType[] = [
   ...CONTENT_PAGES,
 ];
 const SALES_PAGES: PageType[] = [
-  'sales-leads', 'sales-conversations', 'sales-followups', 'sales-intelligence', 'sales-settings',
+  'sales-overview', 'sales-leads', 'sales-ai-calling', 'sales-conversations', 'sales-followups', 'sales-intelligence', 'sales-settings',
 ];
 
 async function fetchCurrentUser(token: string): Promise<AppUser | null> {
@@ -643,7 +651,9 @@ function AppSidebar({
                 <div className="ml-4 border-l border-line pl-2.5 py-0.5 flex flex-col">
                   {(
                     [
+                      { id: 'sales-overview' as PageType, label: 'Overview', navKey: 'sales-overview' },
                       { id: 'sales-leads' as PageType, label: 'Leads', navKey: 'sales-leads' },
+                      { id: 'sales-ai-calling' as PageType, label: 'AI Calling', navKey: 'sales-ai-calling' },
                       { id: 'sales-conversations' as PageType, label: 'Conversations', navKey: 'sales-conversations' },
                       { id: 'sales-followups' as PageType, label: 'Follow-ups', navKey: 'sales-followups' },
                       { id: 'sales-intelligence' as PageType, label: 'Intelligence', navKey: 'sales-intelligence' },
@@ -1317,7 +1327,9 @@ function App() {
       case 'media': return <Media />;
       case 'integrations': return <Integrations />;
       case 'marketing': return <MarketingOverview navigateToPage={navigateToPage} />;
-      case 'sales-leads': return <SalesLeads />;
+      case 'sales-overview': return <SalesOverview />;
+      case 'sales-leads': return <SalesLeadWorkspace />;
+      case 'sales-ai-calling': return <SalesLeads />;
       case 'sales-conversations': return <SalesConversations />;
       case 'sales-followups': return <SalesFollowUps />;
       case 'sales-intelligence': return <SalesIntelligence />;

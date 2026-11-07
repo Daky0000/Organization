@@ -575,6 +575,9 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
           WHERE id IN (
             SELECT id FROM sales_followups
              WHERE status='scheduled' AND scheduled_for <= NOW()
+               -- Human reminders (mode='human') belong to runLeadReminders and
+               -- must never be claimed — let alone dialled — here.
+               AND mode='ai_agent'
              ORDER BY scheduled_for LIMIT 50 FOR UPDATE SKIP LOCKED
           )
           RETURNING id, user_id, contact_id, type, objective`,

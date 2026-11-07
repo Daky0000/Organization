@@ -215,8 +215,10 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
         [reason, req.params.contactId, auth.userId],
       );
       await pool.query(
+        // Do-not-call stops the AI dialer. A salesperson's own reminders stay —
+        // they may still email or message the lead.
         `UPDATE sales_followups SET status='cancelled', updated_at=NOW()
-          WHERE contact_id=$1 AND user_id=$2 AND status IN ('scheduled','due')`,
+          WHERE contact_id=$1 AND user_id=$2 AND status IN ('scheduled','due') AND mode='ai_agent'`,
         [req.params.contactId, auth.userId],
       );
       await pool.query(
@@ -348,15 +350,17 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
     const auth = requireAuth(req, res);
     if (!auth) return;
     try {
-      const { status = 'scheduled,due' } = req.query as Record<string, string>;
+      const { status = 'scheduled,due', mode } = req.query as Record<string, string>;
       const statuses = status.split(',').map((s) => s.trim()).filter(Boolean);
+      const modeFilter = mode === 'human' || mode === 'ai_agent' ? mode : null;
       const { rows } = await pool.query(
-        `SELECT f.*, c.first_name, c.last_name, c.phone
+        `SELECT f.*, c.first_name, c.last_name, c.phone, c.email
            FROM sales_followups f
            LEFT JOIN mailing_contacts c ON c.id = f.contact_id
           WHERE f.user_id=$1 AND f.status = ANY($2::text[])
+            AND ($3::text IS NULL OR f.mode = $3)
           ORDER BY f.scheduled_for ASC LIMIT 200`,
-        [auth.userId, statuses],
+        [auth.userId, statuses, modeFilter],
       );
       res.json({ success: true, followUps: rows });
     } catch (err) {
@@ -369,18 +373,23 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
     const auth = requireAuth(req, res);
     if (!auth) return;
     try {
-      const { contact_id, type, scheduled_for, reason, objective, exact_time_requested } = req.body ?? {};
+      const { contact_id, type, scheduled_for, reason, objective, exact_time_requested, mode } = req.body ?? {};
       if (!contact_id || !scheduled_for) return fail(res, 400, 'contact_id and scheduled_for are required');
       const at = new Date(scheduled_for);
       if (Number.isNaN(at.getTime())) return fail(res, 400, 'scheduled_for is not a valid date');
+      if (mode !== undefined && mode !== 'ai_agent' && mode !== 'human') return fail(res, 400, 'mode must be ai_agent or human');
+      // Default stays 'ai_agent': this endpoint schedules work for the AI dialer.
+      // A human reminder is always a 'task' so nothing can mistake it for a call.
+      const followUpMode = mode === 'human' ? 'human' : 'ai_agent';
+      const followUpType = followUpMode === 'human' ? 'task' : (type || 'phone_call');
       const leadProfileId = await salesEngine.ensureLeadProfile(auth.userId, contact_id);
       const { rows } = await pool.query(
         `INSERT INTO sales_followups
-           (id, user_id, contact_id, lead_profile_id, type, requested_by, scheduled_for, exact_time_requested, reason, objective)
-         VALUES ($1,$2,$3,$4,$5,'human',$6,$7,$8,$9) RETURNING id`,
+           (id, user_id, contact_id, lead_profile_id, type, requested_by, scheduled_for, exact_time_requested, reason, objective, mode)
+         VALUES ($1,$2,$3,$4,$5,'human',$6,$7,$8,$9,$10) RETURNING id`,
         [
-          randomUUID(), auth.userId, contact_id, leadProfileId, type || 'phone_call',
-          at, exact_time_requested === true, reason ?? null, objective ?? null,
+          randomUUID(), auth.userId, contact_id, leadProfileId, followUpType,
+          at, exact_time_requested === true, reason ?? null, objective ?? null, followUpMode,
         ],
       );
       res.json({ success: true, followUpId: rows[0].id });

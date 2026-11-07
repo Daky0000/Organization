@@ -448,8 +448,8 @@ export function buildAutomationEngine({ pool, getResendConfig, getPlatformConfig
           const runAt = new Date(Date.now() + delayToMs(cfg.amount ?? 3, cfg.unit ?? 'days'));
           await pool.query(
             `INSERT INTO sales_followups
-               (id, user_id, contact_id, lead_profile_id, type, requested_by, scheduled_for, reason, objective)
-             VALUES ($1,$2,$3,$4,$5,'automation',$6,$7,$8)`,
+               (id, user_id, contact_id, lead_profile_id, type, requested_by, scheduled_for, reason, objective, mode)
+             VALUES ($1,$2,$3,$4,$5,'automation',$6,$7,$8,'ai_agent')`,
             [
               randomUUID(), userId, contact.id, leadProfileId,
               String(cfg.type ?? 'phone_call'), runAt,

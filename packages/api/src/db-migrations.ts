@@ -4520,6 +4520,7 @@ await pool.query(`CREATE INDEX IF NOT EXISTS campaign_members_contact_idx ON cam
 
 await createLeadgenTables(pool);
 await createSalesTables(pool);
+await createSalesLeadWorkspaceTables(pool);
   await runIncrementalUpgradeMigrations(pool);
 
 }
@@ -4844,6 +4845,128 @@ async function createSalesTables(pool: Pool): Promise<void> {
       UNIQUE (user_id, weekday, hour)
     )
   `).catch((err) => logger.error({ err }, 'migration_failed: sales_call_stats'));
+}
+
+// ── Sales → Lead workspace ────────────────────────────────────────────────────
+//
+// Extends Sales OS for teams that work leads by hand: lists, user-defined
+// columns, an activity log with follow-up rounds, and human reminders that the
+// AI activity reader schedules from free-text notes.
+//
+// sales_followups gains `mode`. 'ai_agent' rows may be auto-dialled by
+// processDueFollowUps; 'human' rows only ever notify a person. There is
+// deliberately no column default: every insert path has to say which it is.
+async function createSalesLeadWorkspaceTables(pool: Pool): Promise<void> {
+  const step = async (name: string, sql: string) => {
+    await pool.query(sql).catch((err) => logger.error({ err }, `migration_failed: ${name}`));
+  };
+
+  // users: reminder timezone + digest opt-out
+  await step('users.timezone', `ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone TEXT`);
+  await step('users.lead_digest_enabled', `ALTER TABLE users ADD COLUMN IF NOT EXISTS lead_digest_enabled BOOLEAN NOT NULL DEFAULT true`);
+
+  // sales_followups: mode (backfill, then lock down), human-reminder columns
+  await step('sales_followups.mode', `ALTER TABLE sales_followups ADD COLUMN IF NOT EXISTS mode TEXT`);
+  await step('sales_followups.mode_backfill', `UPDATE sales_followups SET mode='ai_agent' WHERE mode IS NULL`);
+  await step('sales_followups.mode_not_null', `ALTER TABLE sales_followups ALTER COLUMN mode SET NOT NULL`);
+  await step('sales_followups.mode_drop_default', `ALTER TABLE sales_followups ALTER COLUMN mode DROP DEFAULT`);
+  await step('sales_followups.mode_check', `
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='sales_followups_mode_check') THEN
+        ALTER TABLE sales_followups ADD CONSTRAINT sales_followups_mode_check CHECK (mode IN ('ai_agent','human'));
+      END IF;
+    END $$`);
+  await step('sales_followups.channel', `ALTER TABLE sales_followups ADD COLUMN IF NOT EXISTS channel TEXT`);
+  await step('sales_followups.channel_check', `
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='sales_followups_channel_check') THEN
+        ALTER TABLE sales_followups ADD CONSTRAINT sales_followups_channel_check
+          CHECK (channel IS NULL OR channel IN ('call','whatsapp','sms','email','meeting','other'));
+      END IF;
+    END $$`);
+  await step('sales_followups.source_activity_id', `ALTER TABLE sales_followups ADD COLUMN IF NOT EXISTS source_activity_id TEXT REFERENCES crm_activities(id) ON DELETE SET NULL`);
+  await step('sales_followups.completed_activity_id', `ALTER TABLE sales_followups ADD COLUMN IF NOT EXISTS completed_activity_id TEXT REFERENCES crm_activities(id) ON DELETE SET NULL`);
+  await step('sales_followups.due_tz', `ALTER TABLE sales_followups ADD COLUMN IF NOT EXISTS due_tz TEXT`);
+  await step('sales_followups.ai_confidence', `ALTER TABLE sales_followups ADD COLUMN IF NOT EXISTS ai_confidence REAL`);
+  await step('sales_followups.needs_confirmation', `ALTER TABLE sales_followups ADD COLUMN IF NOT EXISTS needs_confirmation BOOLEAN NOT NULL DEFAULT false`);
+  await step('sales_followups.notified_at', `ALTER TABLE sales_followups ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ`);
+  await step('sales_followups_source_activity_uq', `CREATE UNIQUE INDEX IF NOT EXISTS sales_followups_source_activity_uq ON sales_followups (source_activity_id) WHERE source_activity_id IS NOT NULL`);
+  await step('sales_followups_human_due_idx', `CREATE INDEX IF NOT EXISTS sales_followups_human_due_idx ON sales_followups (scheduled_for) WHERE mode='human' AND status='scheduled' AND notified_at IS NULL`);
+
+  // crm_activities: rounds, response status, AI reader state, import idempotency
+  await step('crm_activities.follow_up_round', `ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS follow_up_round INT`);
+  await step('crm_activities.response_status', `ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS response_status TEXT`);
+  await step('crm_activities.response_status_check', `
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='crm_activities_response_status_check') THEN
+        ALTER TABLE crm_activities ADD CONSTRAINT crm_activities_response_status_check
+          CHECK (response_status IS NULL OR response_status IN
+            ('no_answer','unreachable','call_back','interested','not_interested','registered','paid'));
+      END IF;
+    END $$`);
+  await step('crm_activities.ai_status', `ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS ai_status TEXT NOT NULL DEFAULT 'none'`);
+  await step('crm_activities.ai_status_check', `
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='crm_activities_ai_status_check') THEN
+        ALTER TABLE crm_activities ADD CONSTRAINT crm_activities_ai_status_check
+          CHECK (ai_status IN ('none','pending','processing','done','failed','skipped'));
+      END IF;
+    END $$`);
+  await step('crm_activities.ai_attempts', `ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS ai_attempts INT NOT NULL DEFAULT 0`);
+  await step('crm_activities.ai_result', `ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS ai_result JSONB`);
+  await step('crm_activities.ai_processed_at', `ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS ai_processed_at TIMESTAMPTZ`);
+  await step('crm_activities.import_hash', `ALTER TABLE crm_activities ADD COLUMN IF NOT EXISTS import_hash TEXT`);
+  await step('crm_activities_import_hash_uq', `CREATE UNIQUE INDEX IF NOT EXISTS crm_activities_import_hash_uq ON crm_activities (user_id, import_hash) WHERE import_hash IS NOT NULL`);
+  await step('crm_activities_ai_pending_idx', `CREATE INDEX IF NOT EXISTS crm_activities_ai_pending_idx ON crm_activities (created_at) WHERE ai_status='pending'`);
+
+  // Lists (a lead can sit in many) and user-defined columns
+  await step('sales_lead_lists', `
+    CREATE TABLE IF NOT EXISTS sales_lead_lists (
+      id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name        TEXT NOT NULL,
+      source_type TEXT NOT NULL DEFAULT 'manual'
+                  CHECK (source_type IN ('facebook_ads','event','company','referral','import','manual','other')),
+      color       TEXT,
+      archived_at TIMESTAMPTZ,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  await step('sales_lead_lists_name_uq', `CREATE UNIQUE INDEX IF NOT EXISTS sales_lead_lists_name_uq ON sales_lead_lists (user_id, lower(name))`);
+  await step('sales_lead_list_members', `
+    CREATE TABLE IF NOT EXISTS sales_lead_list_members (
+      list_id    TEXT NOT NULL REFERENCES sales_lead_lists(id) ON DELETE CASCADE,
+      contact_id TEXT NOT NULL REFERENCES mailing_contacts(id) ON DELETE CASCADE,
+      added_at   TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (list_id, contact_id)
+    )`);
+  await step('sales_lead_list_members_contact_idx', `CREATE INDEX IF NOT EXISTS sales_lead_list_members_contact_idx ON sales_lead_list_members (contact_id)`);
+  await step('sales_lead_fields', `
+    CREATE TABLE IF NOT EXISTS sales_lead_fields (
+      id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      key        TEXT NOT NULL,
+      label      TEXT NOT NULL,
+      type       TEXT NOT NULL DEFAULT 'text'
+                 CHECK (type IN ('text','long_text','number','currency','date','boolean','email','phone','url','select')),
+      options    JSONB,
+      builtin    BOOLEAN NOT NULL DEFAULT false,
+      position   INT NOT NULL DEFAULT 0,
+      width      INT,
+      hidden     BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (user_id, key)
+    )`);
+
+  // One digest per user per local day; the row is the claim.
+  await step('sales_digest_log', `
+    CREATE TABLE IF NOT EXISTS sales_digest_log (
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      digest_date DATE NOT NULL,
+      sent_at     TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, digest_date)
+    )`);
 }
 
 // ── Marketing → Lead Generation ───────────────────────────────────────────────

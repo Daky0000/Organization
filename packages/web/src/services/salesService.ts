@@ -101,10 +101,177 @@ export interface SalesFollowUp {
   reason: string | null;
   objective: string | null;
   status: 'scheduled' | 'due' | 'in_progress' | 'completed' | 'cancelled' | 'missed';
+  mode?: 'ai_agent' | 'human';
   last_error: string | null;
   first_name?: string | null;
   last_name?: string | null;
   phone?: string | null;
+}
+
+// ─── Lead workspace vocabularies (mirror api/src/server/sales/leadActivities.ts
+// and the CHECK constraints in db-migrations.ts) ────────────────────────────
+export const ACTIVITY_TYPES = ['call', 'whatsapp', 'sms', 'email', 'meeting', 'note', 'task'] as const;
+export type ActivityType = (typeof ACTIVITY_TYPES)[number];
+
+export const RESPONSE_STATUSES = [
+  'no_answer', 'unreachable', 'call_back', 'interested', 'not_interested', 'registered', 'paid',
+] as const;
+export type ResponseStatus = (typeof RESPONSE_STATUSES)[number];
+
+/** Replaces the colour coding of the old spreadsheet. */
+export const RESPONSE_STATUS_META: Record<ResponseStatus, { label: string; className: string }> = {
+  no_answer:      { label: 'No answer',      className: 'bg-rose-50 text-rose-700 ring-rose-200' },
+  unreachable:    { label: 'Unreachable',    className: 'bg-slate-100 text-slate-600 ring-slate-200' },
+  call_back:      { label: 'Call back',      className: 'bg-amber-50 text-amber-700 ring-amber-200' },
+  interested:     { label: 'Interested',     className: 'bg-sky-50 text-sky-700 ring-sky-200' },
+  not_interested: { label: 'Not interested', className: 'bg-zinc-100 text-zinc-600 ring-zinc-200' },
+  registered:     { label: 'Registered',     className: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
+  paid:           { label: 'Paid',           className: 'bg-emerald-100 text-emerald-800 ring-emerald-300' },
+};
+
+export const ACTIVITY_LABELS: Record<ActivityType, string> = {
+  call: 'Call', whatsapp: 'WhatsApp', sms: 'SMS', email: 'Email', meeting: 'Meeting', note: 'Note', task: 'Task',
+};
+
+export const REMINDER_CHANNELS = ['call', 'whatsapp', 'sms', 'email', 'meeting', 'other'] as const;
+export type ReminderChannel = (typeof REMINDER_CHANNELS)[number];
+export const CHANNEL_LABELS: Record<ReminderChannel, string> = {
+  call: 'Call', whatsapp: 'WhatsApp', sms: 'SMS', email: 'Email', meeting: 'Meeting', other: 'Follow up',
+};
+
+export interface LeadActivity {
+  id: string;
+  type: ActivityType;
+  title: string | null;
+  body: string | null;
+  outcome: string | null;
+  follow_up_round: number | null;
+  response_status: ResponseStatus | null;
+  ai_status: 'none' | 'pending' | 'processing' | 'done' | 'failed' | 'skipped';
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface LeadReminder {
+  id: string;
+  contact_id: string;
+  status: SalesFollowUp['status'];
+  mode: 'human';
+  channel: ReminderChannel | null;
+  scheduled_for: string;
+  due_tz: string | null;
+  reason: string | null;
+  requested_by: 'agent' | 'human' | string;
+  needs_confirmation: boolean;
+  ai_confidence: number | null;
+  exact_time_requested: boolean;
+  source_activity_id: string | null;
+  completed_activity_id: string | null;
+  notified_at: string | null;
+  created_at: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+}
+
+/** "Fri 13 Nov, 15:00" in the given zone. */
+export function formatInZone(iso: string, tz?: string | null): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: tz || undefined, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+    }).format(new Date(iso));
+  } catch {
+    return new Date(iso).toLocaleString();
+  }
+}
+
+/** UTC ISO → "YYYY-MM-DDTHH:mm" wall clock in tz (for datetime-local inputs). */
+export function toZonedLocalInput(iso: string, tz?: string | null): string {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz || undefined, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    }).formatToParts(new Date(iso)).filter((p) => p.type !== 'literal').map((p) => [p.type, p.value]),
+  ) as Record<string, string>;
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+export const LIST_SOURCE_TYPES = ['facebook_ads', 'event', 'company', 'referral', 'import', 'manual', 'other'] as const;
+export type ListSourceType = (typeof LIST_SOURCE_TYPES)[number];
+export const LIST_SOURCE_LABELS: Record<ListSourceType, string> = {
+  facebook_ads: 'Facebook ads', event: 'Event', company: 'Company', referral: 'Referral',
+  import: 'Import', manual: 'Manual', other: 'Other',
+};
+
+export interface LeadList {
+  id: string;
+  name: string;
+  source_type: ListSourceType;
+  color: string | null;
+  archived_at: string | null;
+  created_at: string;
+  lead_count: number;
+}
+
+export const FIELD_TYPES = ['text', 'long_text', 'number', 'currency', 'date', 'boolean', 'email', 'phone', 'url', 'select'] as const;
+export type FieldType = (typeof FIELD_TYPES)[number];
+export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
+  text: 'Text', long_text: 'Long text', number: 'Number', currency: 'Amount', date: 'Date',
+  boolean: 'Yes / no', email: 'Email', phone: 'Phone', url: 'Link', select: 'Choice',
+};
+
+export interface LeadField {
+  key: string;
+  label: string;
+  type: FieldType;
+  options: string[] | null;
+  builtin: boolean;
+  position: number;
+  width: number | null;
+  hidden: boolean;
+}
+
+export interface WorkspaceLead {
+  contact_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone: string | null;
+  created_at: string;
+  stage: LeadStage | null;
+  do_not_call: boolean | null;
+  timezone: string | null;
+  last_contacted_at: string | null;
+  custom_data: Record<string, unknown>;
+  lists: Array<{ id: string; name: string; color: string | null }>;
+  last_response_status: ResponseStatus | null;
+  last_activity_at: string | null;
+  next_followup_at: string | null;
+  next_followup_needs_confirmation: boolean | null;
+  next_followup_channel: ReminderChannel | null;
+}
+
+export interface ImportColumn { index: number; header: string; sample: string[]; suggested: string }
+export interface ImportBlock { index: number; sheet: string; title: string; rowCount: number; columns: ImportColumn[] }
+export interface ImportSummary {
+  created: number; updated: number; unchanged: number; skipped: number; activities: number; lists: string[];
+  phoneWarnings: Array<{ list: string; row: number; name: string; raw: string }>;
+}
+
+export interface LeadOverview {
+  timezone: string;
+  totals: { leads: number; newThisWeek: number; contacted: number; neverContacted: number };
+  byResponseStatus: Record<string, number>;
+  byStage: Record<string, number>;
+  byList: Array<{ id: string; name: string; source_type: ListSourceType; leads: number; contacted: number; responded: number; interested: number; converted: number }>;
+  followups: { overdue: number; today: number; week: number; needs_confirmation: number };
+  activityTrend30d: Array<{ day: string; activities: number; responses: number }>;
+}
+
+let timezoneSync: Promise<void> | null = null;
+
+export function browserTimezone(): string | null {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { return null; }
 }
 
 export interface SalesObjection {
@@ -342,6 +509,165 @@ export const salesService = {
 
   async updateFollowUp(id: string, payload: { status?: string; scheduled_for?: string }) {
     assertSuccess(await api.put<{ success: boolean; error?: string }>(`/api/sales/followups/${id}`, payload));
+  },
+
+  // ─── Lead activity log + human reminders ──────────────────────────────────
+  async listReminders(status = 'scheduled') {
+    const data = assertSuccess(
+      await api.get<{ success: boolean; error?: string; followUps: LeadReminder[] }>(
+        `/api/sales/followups${qs({ status, mode: 'human' })}`,
+      ),
+    );
+    return data.followUps;
+  },
+
+  async listAiFollowUps(status = 'scheduled,due') {
+    const data = assertSuccess(
+      await api.get<{ success: boolean; error?: string; followUps: SalesFollowUp[] }>(
+        `/api/sales/followups${qs({ status, mode: 'ai_agent' })}`,
+      ),
+    );
+    return data.followUps;
+  },
+
+  async getLeadActivity(contactId: string) {
+    return assertSuccess(
+      await api.get<{
+        success: boolean; error?: string; timezone: string;
+        activities: LeadActivity[]; followups: LeadReminder[];
+      }>(`/api/sales/leads/${contactId}/activities`),
+    );
+  },
+
+  async logActivity(contactId: string, payload: {
+    type: ActivityType; body?: string | null; follow_up_round?: number | null;
+    response_status?: ResponseStatus | null; outcome?: string | null;
+    manual_followup?: { due_local: string; due_tz?: string | null; channel?: ReminderChannel | null; reason?: string | null } | null;
+    completes_followup_id?: string | null;
+  }) {
+    return assertSuccess(
+      await api.post<{
+        success: boolean; error?: string; activity: LeadActivity;
+        reminder: LeadReminder | null; ai: 'done' | 'pending' | 'skipped' | 'failed' | 'none';
+      }>(`/api/sales/leads/${contactId}/activities`, payload),
+    );
+  },
+
+  async updateActivity(id: string, payload: { body?: string | null; follow_up_round?: number | null; response_status?: ResponseStatus | null; outcome?: string | null }) {
+    return assertSuccess(
+      await api.patch<{ success: boolean; error?: string; activity: LeadActivity }>(`/api/sales/activities/${id}`, payload),
+    ).activity;
+  },
+
+  async deleteActivity(id: string) {
+    assertSuccess(await api.del<{ success: boolean; error?: string }>(`/api/sales/activities/${id}`));
+  },
+
+  async confirmReminder(id: string) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; reminder: LeadReminder }>(`/api/sales/followups/${id}/confirm`)).reminder;
+  },
+
+  async cancelReminder(id: string) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; reminder: LeadReminder }>(`/api/sales/followups/${id}/cancel`)).reminder;
+  },
+
+  async rescheduleReminder(id: string, payload: { due_local: string; due_tz?: string | null; channel?: ReminderChannel | null; reason?: string | null }) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; reminder: LeadReminder }>(`/api/sales/followups/${id}/reschedule`, payload)).reminder;
+  },
+
+  async getReminderSettings() {
+    return assertSuccess(await api.get<{ success: boolean; error?: string; timezone: string | null; lead_digest_enabled: boolean }>('/api/sales/reminder-settings'));
+  },
+
+  // ─── Lead workspace ───────────────────────────────────────────────────────
+  async listWorkspaceLeads(params: {
+    listId?: string; search?: string; stage?: string; responseStatus?: string;
+    due?: string; neverContacted?: boolean; sort?: string; limit?: number; offset?: number;
+  } = {}) {
+    return assertSuccess(
+      await api.get<{ success: boolean; error?: string; leads: WorkspaceLead[]; total: number }>(
+        `/api/sales/workspace/leads${qs({
+          ...params,
+          neverContacted: params.neverContacted ? 'true' : undefined,
+          limit: params.limit ? String(params.limit) : undefined,
+          offset: params.offset ? String(params.offset) : undefined,
+        })}`,
+      ),
+    );
+  },
+
+  async getWorkspaceLead(contactId: string) {
+    return assertSuccess(await api.get<{ success: boolean; error?: string; lead: WorkspaceLead }>(`/api/sales/workspace/leads/${contactId}`)).lead;
+  },
+
+  async createWorkspaceLead(payload: { first_name?: string; last_name?: string; email?: string; phone?: string; stage?: string; list_ids?: string[]; custom_data?: Record<string, unknown> }) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; lead: WorkspaceLead }>('/api/sales/workspace/leads', payload)).lead;
+  },
+
+  async updateWorkspaceLead(contactId: string, payload: { first_name?: string | null; last_name?: string | null; email?: string | null; phone?: string | null; stage?: string | null; custom_data?: Record<string, unknown> }) {
+    return assertSuccess(await api.patch<{ success: boolean; error?: string; lead: WorkspaceLead }>(`/api/sales/workspace/leads/${contactId}`, payload)).lead;
+  },
+
+  async bulkLeads(contactIds: string[], action: 'set_stage' | 'add_to_list' | 'remove_from_list' | 'delete', value?: string | null) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; affected: number }>('/api/sales/workspace/leads/bulk', { contactIds, action, value })).affected;
+  },
+
+  async listLeadLists() {
+    return assertSuccess(await api.get<{ success: boolean; error?: string; lists: LeadList[] }>('/api/sales/lists')).lists;
+  },
+
+  async createLeadList(payload: { name: string; source_type?: ListSourceType; color?: string | null }) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; list: LeadList }>('/api/sales/lists', payload)).list;
+  },
+
+  async updateLeadList(id: string, payload: { name?: string; source_type?: ListSourceType; color?: string | null; archived?: boolean }) {
+    return assertSuccess(await api.patch<{ success: boolean; error?: string; list: LeadList }>(`/api/sales/lists/${id}`, payload)).list;
+  },
+
+  async deleteLeadList(id: string) {
+    assertSuccess(await api.del<{ success: boolean; error?: string }>(`/api/sales/lists/${id}`));
+  },
+
+  async changeListMembers(id: string, payload: { add?: string[]; remove?: string[] }) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; added: number; removed: number }>(`/api/sales/lists/${id}/members`, payload));
+  },
+
+  async getLeadFields() {
+    return assertSuccess(await api.get<{ success: boolean; error?: string; fields: LeadField[] }>('/api/sales/fields')).fields;
+  },
+
+  async saveLeadFields(fields: Array<Pick<LeadField, 'label' | 'type'> & { key?: string | null; options?: string[] | null; width?: number | null; hidden?: boolean }>) {
+    return assertSuccess(await api.put<{ success: boolean; error?: string; fields: LeadField[] }>('/api/sales/fields', { fields })).fields;
+  },
+
+  async analyzeImport(fileBase64: string, fileName: string) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; blocks: ImportBlock[]; warnings: string[] }>(
+      '/api/sales/import/analyze', { fileBase64, fileName },
+    ));
+  },
+
+  async commitImport(payload: { fileBase64: string; fileName: string; blocks: Array<{ index: number; include: boolean; listName: string; sourceType: ListSourceType; mapping: Record<string, string> }> }) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string } & ImportSummary>('/api/sales/import/commit', payload));
+  },
+
+  async getLeadOverview() {
+    return assertSuccess(await api.get<{ success: boolean; error?: string } & LeadOverview>('/api/sales/workspace/overview'));
+  },
+
+  /** Saves the browser's timezone once, if the user has never set one. Never throws. */
+  ensureReminderTimezone(): Promise<void> {
+    timezoneSync ??= (async () => {
+      try {
+        const s = await salesService.getReminderSettings();
+        const tz = browserTimezone();
+        if (!s.timezone && tz) await salesService.updateReminderSettings({ timezone: tz });
+      } catch { /* best effort: the server falls back to the call-policy zone */ }
+    })();
+    return timezoneSync;
+  },
+
+  async updateReminderSettings(payload: { timezone?: string | null; lead_digest_enabled?: boolean }) {
+    return assertSuccess(await api.put<{ success: boolean; error?: string; timezone: string | null; lead_digest_enabled: boolean }>('/api/sales/reminder-settings', payload));
   },
 
   // ─── Calls ────────────────────────────────────────────────────────────────

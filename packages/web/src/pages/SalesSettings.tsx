@@ -5,6 +5,7 @@ import {
   type SalesCallPolicy, type SalesLead, type SalesPlaybook,
 } from '../services/salesService';
 import VapiTestConsole from '../components/sales/VapiTestConsole';
+import ReminderSettingsCard from '../components/sales/leads/ReminderSettingsCard';
 
 const ACCENT = '#2563EB';
 const DAYS = [
@@ -105,6 +106,8 @@ export default function SalesSettings() {
           <AlertTriangle size={16} className="mt-0.5 shrink-0" /><span>{error}</span>
         </div>
       )}
+
+      <ReminderSettingsCard />
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900">

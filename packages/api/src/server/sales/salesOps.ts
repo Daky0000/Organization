@@ -64,7 +64,7 @@ export interface ValidationCtx {
 const MAX_TEXT = 2000;
 const MAX_TITLE = 200;
 /** A follow-up further out than this is almost certainly a parsing error. */
-const MAX_FUTURE_DAYS = 180;
+export const MAX_FUTURE_DAYS = 180;
 const UPDATABLE_FIELDS = new Set(['role_title', 'timezone', 'is_decision_maker']);
 
 function str(value: unknown, max = MAX_TEXT): string | null {
@@ -275,8 +275,8 @@ async function applyOne(client: PoolClient, op: SalesOp, ctx: ApplyCtx): Promise
       await client.query(
         `INSERT INTO sales_followups
            (id, user_id, contact_id, lead_profile_id, type, requested_by, scheduled_for,
-            exact_time_requested, reason, objective, source_conversation_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            exact_time_requested, reason, objective, source_conversation_id, mode)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'ai_agent')`,
         [
           randomUUID(), userId, contactId, leadProfileId, op.type,
           op.exact_time_requested ? 'lead' : 'agent',

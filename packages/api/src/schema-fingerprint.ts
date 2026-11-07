@@ -1,5 +1,5 @@
 // Generated from the migration source. Regenerate before build or development.
-export const SCHEMA_SOURCE_HASH = 'b67b62cc75cf122ae6635c603738f7ee0802561e4b2aa4e63c465e6d13afe62e';
+export const SCHEMA_SOURCE_HASH = '432a842bf3c61c5e64582fb15b3ef35777a85291b867ca5bcc2e52a0ebae8449';
 export const REQUIRED_SCHEMA_TABLES = [
   "account_metrics",
   "admin_agent_runs",
@@ -158,8 +158,12 @@ export const REQUIRED_SCHEMA_TABLES = [
   "sales_call_stats",
   "sales_conversation_objections",
   "sales_conversations",
+  "sales_digest_log",
   "sales_followups",
   "sales_insights",
+  "sales_lead_fields",
+  "sales_lead_list_members",
+  "sales_lead_lists",
   "sales_lead_profiles",
   "sales_playbooks",
   "schema_migrations",

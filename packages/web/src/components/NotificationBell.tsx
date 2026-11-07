@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWorkspace } from '../contexts/WorkspaceContext';
+import { openAppUrl } from './sales/leads/useLeadParam';
 import {
   Bell,
   Bot,
@@ -57,6 +58,7 @@ const TYPE_META: Record<string, { icon: React.ElementType; color: string; bg: st
   invite_declined:   { icon: X,        color: 'text-red-500',     bg: 'bg-red-50' },
   task_due_soon:     { icon: Clock,       color: 'text-amber-600',  bg: 'bg-amber-50' },
   task_reminder:     { icon: Clock,       color: 'text-orange-600', bg: 'bg-orange-50' },
+  lead_reminder:     { icon: Clock,       color: 'text-blue-600',   bg: 'bg-blue-50' },
   campaign_launched: { icon: Megaphone,   color: 'text-indigo-600', bg: 'bg-indigo-50' },
   campaign_alert:    { icon: Target,      color: 'text-violet-600', bg: 'bg-violet-50' },
   survey_response:   { icon: FileText,    color: 'text-teal-600',   bg: 'bg-teal-50' },
@@ -122,7 +124,7 @@ export default function NotificationBell() {
         } else {
           // On subsequent polls, toast any new task_reminder notifications
           const incoming = (d.notifications as Notification[]).filter(
-            n => n.type === 'task_reminder' && !seenIds.current.has(n.id)
+            n => (n.type === 'task_reminder' || n.type === 'lead_reminder') && !seenIds.current.has(n.id)
           );
           (d.notifications as Notification[]).forEach(n => seenIds.current.add(n.id));
           if (incoming.length > 0) {
@@ -259,9 +261,18 @@ export default function NotificationBell() {
               <div className="mt-0.5 shrink-0 flex h-8 w-8 items-center justify-center rounded-[10px] bg-warn-surface">
                 <Clock size={15} className="text-warn-text" />
               </div>
-              <div className="flex-1 min-w-0">
+              <div
+                className={`flex-1 min-w-0 ${typeof n.data?.url === 'string' ? 'cursor-pointer' : ''}`}
+                onClick={() => {
+                  if (typeof n.data?.url !== 'string') return;
+                  openAppUrl(n.data.url);
+                  dismissToast(n.id);
+                  if (!n.is_read) void markRead(n.id);
+                }}
+              >
                 <p className="text-xs font-medium text-ink leading-snug">{n.title}</p>
                 <p className="text-[11px] text-muted leading-relaxed mt-0.5">{n.message}</p>
+                {typeof n.data?.url === 'string' && <p className="text-[11px] font-semibold text-blue-600 mt-1">Open lead →</p>}
               </div>
               <button onClick={() => dismissToast(n.id)}
                 className="shrink-0 mt-0.5 text-faint hover:text-ink transition-colors">
@@ -383,7 +394,10 @@ export default function NotificationBell() {
                 return (
                   <div
                     key={n.id}
-                    onClick={() => !n.is_read && void markRead(n.id)}
+                    onClick={() => {
+                      if (!n.is_read) void markRead(n.id);
+                      if (typeof n.data?.url === 'string') { openAppUrl(n.data.url); setOpen(false); }
+                    }}
                     className={`flex items-start gap-3 px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors ${!n.is_read ? 'bg-indigo-50/40' : ''}`}
                   >
                     <div className={`mt-0.5 shrink-0 flex h-7 w-7 items-center justify-center rounded-xl ${bg}`}>

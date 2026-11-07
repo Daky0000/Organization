@@ -48,6 +48,9 @@ import { registerCRMCompaniesRoutes } from './server/crmCompaniesRoutes.ts';
 import { registerCRMDealsRoutes } from './server/crmDealsRoutes.ts';
 import { registerCRMActivitiesRoutes } from './server/crmActivitiesRoutes.ts';
 import { registerSalesRoutes } from './server/salesRoutes.ts';
+import { registerSalesLeadsRoutes } from './server/salesLeadsRoutes.ts';
+import { processPendingActivityReads } from './server/sales/leadActivities.ts';
+import { runLeadDigests, runLeadReminders } from './server/sales/leadReminders.ts';
 import { buildSalesEngine } from './server/sales/salesEngine.ts';
 import { registerCalendarRoutes } from './server/calendarRoutes.ts';
 import { registerUiStateRoutes } from './server/uiStateRoutes.ts';
@@ -941,6 +944,8 @@ app.get('/api/autopilot/ops/diagnostics', async (req: Request, res: Response) =>
 // Built on the CRM contact rather than beside it: sales_lead_profiles hangs off
 // mailing_contacts, and every analysed conversation also writes a crm_activities
 // row so the Companies and Pipeline pages pick it up with no sync job.
+// Lead workspace first: its literal paths must win over /leads/:contactId.
+app.use('/api/sales', registerSalesLeadsRoutes({ requireAuth, pool: pool! }));
 app.use('/api/sales', registerSalesRoutes({ requireAuth, pool: pool!, salesEngine }));
 
 // ─── Connector Abstraction Layer ──────────────────────────────────────────────
@@ -1255,6 +1260,15 @@ if (config.nodeEnv !== 'test') {
     // Weekly pattern mining. Proposals only — nothing is applied without a human.
     setTimeout(() => void salesEngine.runWeeklyInsights(), 45 * 60 * 1000);
     setInterval(() => void salesEngine.runWeeklyInsights(), 7 * 24 * 60 * 60 * 1000);
+
+    // ── Sales lead workspace ──
+    // Retry AI reads of activity notes whose inline read timed out.
+    setInterval(() => void processPendingActivityReads(pool!), 60 * 1000);
+    // Human follow-up reminders → bell notifications. Never dials anything.
+    void runLeadReminders(pool!);
+    setInterval(() => void runLeadReminders(pool!), 2 * 60 * 1000);
+    // Daily 07:00-local email digest of due/overdue reminders.
+    setInterval(() => void runLeadDigests(pool!, mailer.sendPlatformEmail, { appUrl: config.appUrl }), 10 * 60 * 1000);
   });
   process.once('SIGTERM', () => {
     httpServer.close(() => { void pool.end().finally(() => process.exit(0)); });

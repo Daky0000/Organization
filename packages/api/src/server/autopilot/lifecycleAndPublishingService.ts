@@ -8,6 +8,7 @@ import { evaluateMediaPublishability, mergeValidationIssues, placementForItem, p
 import { getTenantControls, isGlobalPublishingKilled } from './billingAndBudgetService.ts';
 import type { AssetStorageDriver } from './assetStorage.ts';
 import { logger } from '../../logger.ts';
+import { isValidIanaTimezone, resolveZonedLocal } from '../timezones.ts';
 import {
   ALLOWED_LIFECYCLE_TRANSITIONS,
   type ContentItemRecord,
@@ -119,48 +120,19 @@ export function classifyPublishError(err: unknown): {
 
 // ── Time handling ────────────────────────────────────────────────────────────
 
-export function isValidIanaTimezone(tz: string): boolean {
-  if (!tz || typeof tz !== 'string') return false;
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function zoneOffsetMs(utcMs: number, tz: string): number {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      .formatToParts(new Date(utcMs))
-      .filter((p) => p.type !== 'literal')
-      .map((p) => [p.type, Number(p.value)]),
-  ) as Record<string, number>;
-  const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
-  return asUtc - Math.floor(utcMs / 1000) * 1000;
-}
+export { isValidIanaTimezone };
 
 /**
  * Converts a wall-clock time in an IANA zone to a UTC instant. A time that does
  * not exist (spring-forward gap) is rejected; an ambiguous one (fall-back) takes
- * the earlier instant and says so.
+ * the earlier instant and says so. The maths lives in ../timezones.ts.
  */
 export function zonedLocalToUtc(local: string, tz: string): { iso: string; ambiguous: boolean } {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(local || '').trim());
-  if (!m) throw new AutopilotLifecycleError('INVALID_SCHEDULE_DATE', 'scheduled_local must be YYYY-MM-DDTHH:mm.', 400);
-  if (!isValidIanaTimezone(tz)) throw new AutopilotLifecycleError('INVALID_TIMEZONE', `"${tz}" is not an IANA timezone.`, 400);
-  const [y, mo, d, h, mi, s] = [m[1], m[2], m[3], m[4], m[5], m[6] ?? '0'].map(Number);
-  const wall = Date.UTC(y, mo - 1, d, h, mi, s);
-  const candidates = new Set<number>();
-  for (const probe of [wall - 14 * 3600_000, wall, wall + 14 * 3600_000]) {
-    const guess = wall - zoneOffsetMs(probe, tz);
-    if (guess + zoneOffsetMs(guess, tz) === wall) candidates.add(guess);
-  }
-  const valid = [...candidates].sort((a, b) => a - b);
-  if (!valid.length) {
-    throw new AutopilotLifecycleError('DST_GAP', `${local} does not exist in ${tz} (the clocks skip it). Choose a time outside the daylight-saving change.`, 400, { local, timezone: tz });
-  }
-  return { iso: new Date(valid[0]).toISOString(), ambiguous: valid.length > 1 };
+  const result = resolveZonedLocal(local, tz);
+  if (result.ok) return { iso: result.iso, ambiguous: result.ambiguous };
+  if (result.reason === 'invalid_format') throw new AutopilotLifecycleError('INVALID_SCHEDULE_DATE', 'scheduled_local must be YYYY-MM-DDTHH:mm.', 400);
+  if (result.reason === 'invalid_timezone') throw new AutopilotLifecycleError('INVALID_TIMEZONE', `"${tz}" is not an IANA timezone.`, 400);
+  throw new AutopilotLifecycleError('DST_GAP', `${local} does not exist in ${tz} (the clocks skip it). Choose a time outside the daylight-saving change.`, 400, { local, timezone: tz });
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────

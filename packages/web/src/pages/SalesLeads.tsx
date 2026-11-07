@@ -9,6 +9,8 @@ import {
   type SalesLead, type SalesObjection, type SalesCallAttempt,
   OBJECTION_LABELS,
 } from '../services/salesService';
+import ActivityTimeline from '../components/sales/leads/ActivityTimeline';
+import { useLeadParam } from '../components/sales/leads/useLeadParam';
 
 const ACCENT = '#2563EB';
 
@@ -246,6 +248,8 @@ function LeadDetail({ contactId, onBack }: { contactId: string; onBack: () => vo
 
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">
+          <ActivityTimeline contactId={contactId} />
+
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <h3 className="mb-3 text-sm font-bold text-slate-900">Conversations</h3>
             {conversations.length === 0 && <p className="text-sm text-slate-400">No conversations yet.</p>}
@@ -347,7 +351,8 @@ export default function SalesLeads() {
   const [stage, setStage] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [detailId, setDetailId] = useState<string | null>(null);
+  // ?lead=<id> (e.g. from a reminder notification) opens that lead directly.
+  const [detailId, setDetailId] = useLeadParam();
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState({ first_name: '', last_name: '', phone: '', email: '' });
 
