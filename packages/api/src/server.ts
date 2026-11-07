@@ -49,6 +49,8 @@ import { registerCRMDealsRoutes } from './server/crmDealsRoutes.ts';
 import { registerCRMActivitiesRoutes } from './server/crmActivitiesRoutes.ts';
 import { registerSalesRoutes } from './server/salesRoutes.ts';
 import { registerSalesLeadsRoutes } from './server/salesLeadsRoutes.ts';
+import { registerCompanyContextRoutes } from './server/companyContextRoutes.ts';
+import { seedAdminCompanyContext } from './server/companyContext.ts';
 import { processPendingActivityReads } from './server/sales/leadActivities.ts';
 import { runLeadDigests, runLeadReminders } from './server/sales/leadReminders.ts';
 import { buildSalesEngine } from './server/sales/salesEngine.ts';
@@ -517,6 +519,8 @@ async function ensureDatabase() {
     .then((count) => { if (count) logger.info({ count }, 'token_data_secrets_migrated'); })
     .catch((err) => logger.warn({ err }, 'token_data_secret_migration_failed'));
   setDbReady(true);
+  // Africon company context for admin accounts that never had it (editable afterwards).
+  void seedAdminCompanyContext(pool);
 
 }
 
@@ -946,6 +950,7 @@ app.get('/api/autopilot/ops/diagnostics', async (req: Request, res: Response) =>
 // row so the Companies and Pipeline pages pick it up with no sync job.
 // Lead workspace first: its literal paths must win over /leads/:contactId.
 app.use('/api/sales', registerSalesLeadsRoutes({ requireAuth, pool: pool! }));
+app.use('/api/company-context', registerCompanyContextRoutes({ requireAuth, pool: pool! }));
 app.use('/api/sales', registerSalesRoutes({ requireAuth, pool: pool!, salesEngine }));
 
 // ─── Connector Abstraction Layer ──────────────────────────────────────────────

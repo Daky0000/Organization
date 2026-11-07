@@ -4973,6 +4973,34 @@ async function createSalesLeadWorkspaceTables(pool: Pool): Promise<void> {
       PRIMARY KEY (user_id, plan_date)
     )`);
 
+  // Company context: what the orchestrator knows about the business (editable).
+  await step('company_context_items', `
+    CREATE TABLE IF NOT EXISTS company_context_items (
+      id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind       TEXT NOT NULL CHECK (kind IN ('overview','offering','event','program','audience','proof','policy','playbook','contact','faq','note')),
+      title      TEXT NOT NULL,
+      summary    TEXT,
+      body       TEXT,
+      data       JSONB NOT NULL DEFAULT '{}'::jsonb,
+      tags       TEXT[] NOT NULL DEFAULT '{}',
+      position   INT NOT NULL DEFAULT 0,
+      active     BOOLEAN NOT NULL DEFAULT true,
+      source     TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('seed','manual','ai')),
+      seed_key   TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  await step('company_context_items_user_idx', `CREATE INDEX IF NOT EXISTS company_context_items_user_idx ON company_context_items (user_id, kind)`);
+  await step('company_context_items_seed_uq', `CREATE UNIQUE INDEX IF NOT EXISTS company_context_items_seed_uq ON company_context_items (user_id, seed_key) WHERE seed_key IS NOT NULL`);
+  await step('company_context_seeds', `
+    CREATE TABLE IF NOT EXISTS company_context_seeds (
+      user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      seed      TEXT NOT NULL,
+      seeded_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (user_id, seed)
+    )`);
+
   // One digest per user per local day; the row is the claim.
   await step('sales_digest_log', `
     CREATE TABLE IF NOT EXISTS sales_digest_log (

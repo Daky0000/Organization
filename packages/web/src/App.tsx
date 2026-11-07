@@ -61,6 +61,7 @@ const MarketingOverview = lazy(() => import('./pages/MarketingOverview'));
 const SalesLeads = lazy(() => import('./pages/SalesLeads'));
 const SalesLeadWorkspace = lazy(() => import('./pages/SalesLeadWorkspace'));
 const SalesOverview = lazy(() => import('./pages/SalesOverview'));
+const AgentHub = lazy(() => import('./pages/AgentHub'));
 const SalesConversations = lazy(() => import('./pages/SalesConversations'));
 const SalesFollowUps = lazy(() => import('./pages/SalesFollowUps'));
 const SalesIntelligence = lazy(() => import('./pages/SalesIntelligence'));
@@ -109,6 +110,7 @@ export type PageType =
   | 'memory'
   | 'integrations'
   | 'marketing'
+  | 'agent'
   | 'sales-overview'
   | 'sales-leads'
   | 'sales-ai-calling'
@@ -153,6 +155,7 @@ const PAGE_PATHS: Record<PageType, string> = {
   memory: '/memory',
   integrations: '/integrations',
   marketing: '/marketing',
+  'agent': '/agent',
   'sales-overview': '/sales/overview',
   'sales-leads': '/sales/leads',
   'sales-ai-calling': '/sales/ai-calling',
@@ -184,6 +187,7 @@ const PAGE_TITLES: Record<PageType, string> = {
   memory: 'Brand Memory',
   integrations: 'Integrations',
   marketing: 'Marketing Overview',
+  'agent': 'AI Agent',
   'sales-overview': 'Sales Overview',
   'sales-leads': 'Leads',
   'sales-ai-calling': 'AI Calling',
@@ -610,6 +614,14 @@ function AppSidebar({
         {/* ── Pipeline & Operations Section ── */}
         <section className="os-nav-section">
           <h2>Operations &amp; Growth</h2>
+
+          {/* One orchestrating AI agent: every former agent is one of its skills */}
+          {navOn('agent') && matches('AI Agent') && (
+            <button type="button" onClick={() => go('agent')} className={cls(currentPage === 'agent')}>
+              <Sparkles size={15} className="shrink-0 opacity-75" />
+              <span className="flex-1 text-left">AI Agent</span>
+            </button>
+          )}
 
           {/* CRM */}
           {navOn('crm-companies') && matches('CRM Companies') && (
@@ -1327,6 +1339,7 @@ function App() {
       case 'media': return <Media />;
       case 'integrations': return <Integrations />;
       case 'marketing': return <MarketingOverview navigateToPage={navigateToPage} />;
+      case 'agent': return <AgentHub />;
       case 'sales-overview': return <SalesOverview />;
       case 'sales-leads': return <SalesLeadWorkspace />;
       case 'sales-ai-calling': return <SalesLeads />;
@@ -1421,7 +1434,8 @@ function App() {
                   >
                     Overview
                   </button>
-                )}                <NotificationBell />
+                )}
+                <NotificationBell />
                 <span className="os-topbar-date">
                   {new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date())}
                 </span>

@@ -15,6 +15,7 @@ const NAV_TREE: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'notifications', label: 'Notifications' },
   { key: 'social-inbox', label: 'Social Inbox' },
+  { key: 'agent', label: 'AI Agent' },
   { key: 'crm-companies', label: 'Companies' },
   {
     key: 'sales', label: 'Sales',
