@@ -18,7 +18,8 @@
 
 import type { Pool } from 'pg';
 import { buildSharedAgentContext } from '../agentSharedContext.ts';
-import { OBJECTION_LABELS, type ObjectionCode } from './types.ts';
+import { OBJECTION_LABELS, isCallType, type CallType, type ObjectionCode } from './types.ts';
+import { getLeadSheetContext, renderLeadSheet } from './leadSheetContext.ts';
 
 export interface CallBrief {
   /** The system prompt for the voice agent. */
@@ -36,6 +37,38 @@ const DEFAULT_OBJECTIVES: Record<string, string> = {
   proposal: 'Confirm they reviewed the proposal and surface any remaining objection.',
   negotiation: 'Resolve the outstanding objection and agree next steps.',
   unreachable: 'Confirm this is the right contact and whether they want to be reached at all.',
+};
+
+/**
+ * What each kind of call is for. A reminder call is short and specific; it is
+ * not a sales pitch, and the agent is told so.
+ */
+export const CALL_TYPE_BRIEFS: Record<CallType, { label: string; objective: string; guidance: string }> = {
+  sales: {
+    label: 'Sales call',
+    objective: '',
+    guidance: 'This is a sales call. Find out whether they have the need we solve, and move toward the next step.',
+  },
+  follow_up: {
+    label: 'Follow-up call',
+    objective: 'Pick up where the last conversation left off and agree the next step.',
+    guidance: 'This is a follow-up. Refer to the last conversation and the recent activity below. Do not start the pitch from scratch.',
+  },
+  reminder_meeting: {
+    label: 'Meeting reminder',
+    objective: 'Remind them of their upcoming meeting or appointment and confirm they will attend.',
+    guidance: 'This is a short reminder call, not a sales pitch. State the meeting or appointment (date, time, place or link, from the notes and sheet row below), ask them to confirm they can attend, and offer to note a new time if they cannot. Keep it under two minutes.',
+  },
+  reminder_payment: {
+    label: 'Payment / deadline reminder',
+    objective: 'Remind them of the amount or deadline that is due and find out when they will settle it.',
+    guidance: 'This is a short, polite reminder call about a payment or deadline. Use only the amount, due date and details in the notes and sheet row below; never guess an amount. Ask when they expect to pay or complete it, and repeat that date back. Never threaten or pressure.',
+  },
+  reminder_followup: {
+    label: 'Follow-up reminder',
+    objective: 'Make the follow-up call that was scheduled for this lead.',
+    guidance: 'You are making a follow-up call that was scheduled earlier (see the open reminders and recent activity below). Say why you are calling back and move the conversation to the next step.',
+  },
 };
 
 function bullets(items: string[], empty: string): string {
@@ -57,9 +90,15 @@ export async function buildCallBrief(
     objective?: string | null;
     followUpReason?: string | null;
     businessName?: string | null;
+    callType?: string | null;
+    /** The user's own instructions for this call. */
+    note?: string | null;
   },
 ): Promise<CallBrief> {
   const { userId, contactId } = params;
+  const callType: CallType = isCallType(params.callType) ? params.callType : 'sales';
+  const typeBrief = CALL_TYPE_BRIEFS[callType];
+  const sheet = await getLeadSheetContext(pool, userId, contactId).catch(() => null);
 
   const [contactRes, profileRes, lastConvRes, objectionsRes, promisesRes, playbookRes] = await Promise.all([
     pool.query(
@@ -105,7 +144,8 @@ export async function buildCallBrief(
 
   const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ').trim();
   const objective =
-    params.objective?.trim() || DEFAULT_OBJECTIVES[stage] || DEFAULT_OBJECTIVES.new;
+    params.objective?.trim() || typeBrief.objective || DEFAULT_OBJECTIVES[stage] || DEFAULT_OBJECTIVES.new;
+  const sheetText = sheet ? renderLeadSheet(sheet) : '';
 
   const playbookByCode = new Map<string, string>();
   for (const row of playbookRes.rows) {
@@ -150,17 +190,24 @@ export async function buildCallBrief(
   const systemPrompt = [
     `You are a sales representative${params.businessName ? ` for ${params.businessName}` : ''} making a phone call. You are speaking out loud on a live call, so keep replies short and conversational — one or two sentences, then let them talk.`,
     '',
+    `CALL TYPE: ${typeBrief.label}`,
+    typeBrief.guidance,
+    '',
     'CALL OBJECTIVE',
     objective,
     params.followUpReason ? `\nWhy we are calling now: ${params.followUpReason}` : '',
+    params.note?.trim() ? `\nNOTES FROM THE TEAM FOR THIS CALL (follow these):\n${params.note.trim().slice(0, 2000)}` : '',
     '',
     'WHO YOU ARE CALLING',
     whoParts.map((p) => `- ${p}`).join('\n'),
     profile.summary ? `\nWhat we know about them: ${profile.summary}` : '',
+    sheetText ? `\n${sheetText}` : '',
     '',
     'WHAT HAPPENED LAST TIME',
     lastTime,
     '',
+    sheet?.recentActivity.length ? `RECENT ACTIVITY (newest first)\n${bullets(sheet.recentActivity, '')}\n` : '',
+    sheet?.openReminders.length ? `OPEN REMINDERS FOR THIS LEAD\n${bullets(sheet.openReminders, '')}\n` : '',
     'OPEN OBJECTIONS',
     bullets(openObjections, '- None recorded.'),
     '',
@@ -177,10 +224,12 @@ export async function buildCallBrief(
     '- Re-ask anything already answered in "what happened last time".',
     '- Claim a promise was delivered if it is listed as not yet delivered.',
     '- Invent pricing, features, timelines, or customer names. If you do not know, say you will find out.',
+    '- Read the sheet row aloud like a list, or mention details that are not relevant to this call.',
+    '- Quote an amount, date or meeting detail that is not written above.',
     '- Argue. If they object, acknowledge it and ask a question.',
     '',
     'HOW TO END',
-    'If they want a follow-up, ask for a specific day and time and repeat it back. If they ask not to be called again, acknowledge it warmly and end the call. Always thank them for their time.',
+    'If they give you new or corrected details (a new email, an amount paid, a date they will pay, whether they will attend), repeat them back to confirm. If they want a follow-up, ask for a specific day and time and repeat it back. If they ask not to be called again, acknowledge it warmly and end the call. Always thank them for their time.',
   ]
     .filter((line) => line !== '')
     .join('\n');

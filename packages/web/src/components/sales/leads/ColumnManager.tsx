@@ -21,15 +21,22 @@ const toDraft = (f: LeadField): Draft => ({
 /**
  * "Edit columns" — reordering, renaming, hiding and adding are edited together
  * and saved in one go, so the table never passes through half-applied states.
- * Removing a custom column deletes its values from every lead.
+ *
+ * Opened on all leads it edits every column, and removing a custom column
+ * deletes its values from every lead. Opened on a list (`list` set) it edits
+ * that list's columns: `fields` is what the list shows, `allFields` the full
+ * set to add existing columns from, new columns belong to the list, and
+ * removing one only takes it off the list.
  */
 export default function ColumnManager({
-  open, fields, onClose, onSaved,
+  open, fields, allFields, list, onClose, onSaved,
 }: {
   open: boolean;
   fields: LeadField[];
+  allFields?: LeadField[];
+  list?: { id: string; name: string } | null;
   onClose: () => void;
-  onSaved: (fields: LeadField[]) => void;
+  onSaved: (fields: LeadField[], listKeys?: string[]) => void;
 }) {
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [saving, setSaving] = useState(false);
@@ -37,6 +44,10 @@ export default function ColumnManager({
 
   useEffect(() => { if (open) { setDrafts(fields.map(toDraft)); setError(null); } }, [open, fields]);
   if (!open) return null;
+
+  const addable = list
+    ? (allFields ?? []).filter((f) => !f.builtin && !drafts.some((d) => d.key === f.key))
+    : [];
 
   const patch = (i: number, p: Partial<Draft>) => setDrafts((d) => d.map((x, j) => (j === i ? { ...x, ...p } : x)));
   const move = (i: number, dir: -1 | 1) => setDrafts((d) => {
@@ -49,15 +60,20 @@ export default function ColumnManager({
   const removedCustom = fields.filter((f) => !f.builtin && !drafts.some((d) => d.key === f.key));
 
   const save = async () => {
-    if (removedCustom.length && !window.confirm(`Delete ${removedCustom.map((f) => `"${f.label}"`).join(', ')} and the values stored in it for every lead?`)) return;
+    if (!list && removedCustom.length && !window.confirm(`Delete ${removedCustom.map((f) => `"${f.label}"`).join(', ')} and the values stored in it for every lead?`)) return;
     setSaving(true);
     setError(null);
     try {
-      const saved = await salesService.saveLeadFields(drafts.map((d) => ({
+      const payload = drafts.map((d) => ({
         key: d.key, label: d.label.trim(), type: d.type, hidden: d.hidden, width: d.width,
         options: d.type === 'select' ? d.options.split(',').map((o) => o.trim()).filter(Boolean) : null,
-      })));
-      onSaved(saved);
+      }));
+      if (list) {
+        const res = await salesService.saveListFields(list.id, payload);
+        onSaved(res.fields, res.keys);
+      } else {
+        onSaved(await salesService.saveLeadFields(payload));
+      }
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save columns');
@@ -70,7 +86,10 @@ export default function ColumnManager({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-          <h2 className="text-base font-bold text-slate-900">Edit columns</h2>
+          <div className="min-w-0">
+            <h2 className="truncate text-base font-bold text-slate-900">{list ? `Columns in "${list.name}"` : 'Edit columns'}</h2>
+            {list && <p className="text-xs text-slate-500">Removing a column takes it off this list only. Its values are kept.</p>}
+          </div>
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-700"><X size={18} /></button>
         </div>
         <div className="flex-1 space-y-2 overflow-y-auto px-5 py-4">
@@ -98,7 +117,7 @@ export default function ColumnManager({
                 {d.hidden ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>
               {!d.builtin && (
-                <button type="button" onClick={() => setDrafts((x) => x.filter((_, j) => j !== i))} className="text-slate-300 hover:text-rose-500" title="Delete column">
+                <button type="button" onClick={() => setDrafts((x) => x.filter((_, j) => j !== i))} className="text-slate-300 hover:text-rose-500" title={list ? 'Remove from this list' : 'Delete column'}>
                   <Trash2 size={15} />
                 </button>
               )}
@@ -111,8 +130,18 @@ export default function ColumnManager({
           <button type="button"
             onClick={() => setDrafts((d) => [...d, { key: null, label: '', type: 'text', options: '', builtin: false, hidden: false, width: null, uid: `new-${Date.now()}` }])}
             className="inline-flex items-center gap-1.5 rounded-xl border border-dashed border-slate-300 px-3 py-2 text-sm font-semibold text-slate-600 hover:border-blue-400 hover:text-blue-700">
-            <Plus size={14} /> Add column
+            <Plus size={14} /> {list ? 'New column' : 'Add column'}
           </button>
+          {addable.length > 0 && (
+            <select value="" onChange={(e) => {
+              const f = addable.find((x) => x.key === e.target.value);
+              if (f) setDrafts((d) => [...d, toDraft(f)]);
+            }}
+              className="ml-2 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-600">
+              <option value="">Add an existing column…</option>
+              {addable.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+            </select>
+          )}
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
           <p className="text-xs text-rose-600">{error}</p>

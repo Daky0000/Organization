@@ -189,6 +189,22 @@ export default function SalesSettings() {
               </span>
             </span>
           </label>
+
+          <label className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={policy.requireCallApproval ?? true}
+              onChange={(e) => set('requireCallApproval', e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300"
+            />
+            <span>
+              <span className="text-sm font-semibold text-slate-800">Approve each AI call before it dials</span>
+              <span className="block text-xs text-slate-500">
+                Calls prepared for several leads at once, and follow-up calls the AI books itself, wait in
+                "Calls to approve" on the Leads page. A call you start on one lead is approved by that click.
+              </span>
+            </span>
+          </label>
         </div>
       </section>
 

@@ -22,6 +22,7 @@ import {
   type LeadStage,
   type ObjectionCode,
 } from './types.ts';
+import { coerceFieldValue, type LeadField } from './leadWorkspace.ts';
 
 export type SalesOp =
   | { op: 'update_lead_stage'; stage: LeadStage; reason: string }
@@ -39,7 +40,10 @@ export type SalesOp =
   | { op: 'update_lead_field'; field: 'role_title' | 'timezone' | 'is_decision_maker'; value: string }
   | { op: 'set_do_not_call'; reason: string }
   | { op: 'request_human_handoff'; reason: string }
-  | { op: 'link_deal'; deal_id: string; probability: number };
+  | { op: 'link_deal'; deal_id: string; probability: number }
+  /** A value for one of the lead's sheet columns, already coerced to the column type. */
+  | { op: 'update_custom_field'; key: string; label: string; value: unknown }
+  | { op: 'add_company_note'; body: string };
 
 export type SalesOpName = SalesOp['op'];
 
@@ -59,6 +63,10 @@ export interface ValidationCtx {
   now: Date;
   /** Op names listed in sales_call_policies.require_approval_for. */
   requireApprovalFor: string[];
+  /** The lead's sheet columns — the only keys update_custom_field may write. */
+  sheetColumns?: Pick<LeadField, 'key' | 'label' | 'type' | 'options'>[];
+  /** The lead's company, if any — add_company_note needs one. */
+  companyId?: string | null;
 }
 
 const MAX_TEXT = 2000;
@@ -175,6 +183,28 @@ export function validateSalesOps(raw: unknown, ctx: ValidationCtx): ValidationRe
         parsed = { op: 'link_deal', deal_id: dealId, probability: Math.round(probability) };
         break;
       }
+      case 'update_custom_field': {
+        const key = typeof o.key === 'string' ? o.key : '';
+        const column = (ctx.sheetColumns ?? []).find((c) => c.key === key);
+        if (!column) { reject(item, `column "${key}" is not one of this lead's sheet columns`); break; }
+        let value: unknown;
+        try {
+          value = coerceFieldValue(column, o.value);
+        } catch (err) {
+          reject(item, err instanceof Error ? err.message : 'value does not fit the column');
+          break;
+        }
+        if (value === null) { reject(item, 'update_custom_field will not blank a column'); break; }
+        parsed = { op: 'update_custom_field', key, label: column.label, value };
+        break;
+      }
+      case 'add_company_note': {
+        const body = str(o.body);
+        if (!body) { reject(item, 'add_company_note requires a body'); break; }
+        if (!ctx.companyId) { reject(item, 'the lead has no company'); break; }
+        parsed = { op: 'add_company_note', body };
+        break;
+      }
       default:
         reject(item, `unknown op "${String(name)}"`);
     }
@@ -192,6 +222,7 @@ export interface ApplyCtx {
   contactId: string;
   leadProfileId: string | null;
   conversationId: string | null;
+  companyId?: string | null;
 }
 
 export interface ApplyResult {
@@ -361,6 +392,45 @@ async function applyOne(client: PoolClient, op: SalesOp, ctx: ApplyCtx): Promise
         [contactId, op.probability, op.deal_id, userId],
       );
       if (!rowCount) throw new Error('deal not found for this user');
+      return;
+    }
+
+    case 'update_custom_field': {
+      // The key was checked against the lead's columns in validateSalesOps and
+      // is passed as a parameter, never spliced into SQL.
+      await client.query(
+        `INSERT INTO sales_lead_profiles (id, user_id, contact_id) VALUES ($1,$2,$3) ON CONFLICT (contact_id) DO NOTHING`,
+        [randomUUID(), userId, contactId],
+      );
+      const { rows } = await client.query(
+        `SELECT custom_data->$3::text AS old FROM sales_lead_profiles WHERE contact_id=$1 AND user_id=$2 FOR UPDATE`,
+        [contactId, userId, op.key],
+      );
+      const old = rows[0]?.old ?? null;
+      if (old !== null && JSON.stringify(old) === JSON.stringify(op.value)) return; // unchanged
+      await client.query(
+        `UPDATE sales_lead_profiles
+            SET custom_data = COALESCE(custom_data, '{}'::jsonb) || jsonb_build_object($3::text, $4::jsonb), updated_at=NOW()
+          WHERE contact_id=$1 AND user_id=$2`,
+        [contactId, userId, op.key, JSON.stringify(op.value)],
+      );
+      // Logged with the old value so the change can be checked and undone by hand.
+      const show = (v: unknown) => (v === null || v === undefined || v === '' ? '(empty)' : typeof v === 'boolean' ? (v ? 'yes' : 'no') : String(v));
+      await client.query(
+        `INSERT INTO crm_activities (id, user_id, contact_id, type, title, body, completed_at)
+         VALUES ($1,$2,$3,'note',$4,$5,NOW())`,
+        [randomUUID(), userId, contactId, `AI updated "${op.label}"`, `${show(old)} → ${show(op.value)} (from the call)`],
+      );
+      return;
+    }
+
+    case 'add_company_note': {
+      if (!ctx.companyId) throw new Error('no company for this lead');
+      await client.query(
+        `INSERT INTO crm_activities (id, user_id, contact_id, company_id, type, title, body, completed_at)
+         SELECT $1,$2,$3,co.id,'note','Call note (AI)',$5,NOW() FROM crm_companies co WHERE co.id=$4 AND co.user_id=$2`,
+        [randomUUID(), userId, contactId, ctx.companyId, op.body],
+      );
       return;
     }
   }

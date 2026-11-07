@@ -39,6 +39,8 @@ import {
   getWorkspaceLead,
   LIST_SOURCE_TYPES,
   listFieldKeys,
+  mergeLeadLists,
+  putListFields,
   listLeadLists,
   putLeadFields,
   queryLeads,
@@ -119,6 +121,11 @@ const listPatchSchema = z.object({
   source_type: z.enum(LIST_SOURCE_TYPES).optional(),
   color: z.string().max(20).nullish(),
   archived: z.boolean().optional(),
+});
+
+const listMergeSchema = z.object({
+  sourceIds: z.array(z.string().max(64)).min(1, 'Choose at least one list to merge').max(200),
+  name: z.string().max(120).nullish(),
 });
 
 const listBulkDeleteSchema = z.object({
@@ -491,6 +498,30 @@ export function registerSalesLeadsRoutes({ requireAuth, pool }: Deps): Router {
       res.json({ success: true, keys: await listFieldKeys(pool, auth.userId, req.params.id) });
     } catch (err) {
       handle(res, err, 'sales_list_fields_failed', 'Failed to load list columns');
+    }
+  });
+
+  router.put('/lists/:id/fields', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    const b = parseBody(fieldsSchema, req, res);
+    if (!b) return;
+    try {
+      res.json({ success: true, ...(await putListFields(pool, auth.userId, req.params.id, b.fields)) });
+    } catch (err) {
+      handle(res, err, 'sales_list_fields_update_failed', 'Failed to save list columns');
+    }
+  });
+
+  router.post('/lists/:id/merge', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    const b = parseBody(listMergeSchema, req, res);
+    if (!b) return;
+    try {
+      res.json({ success: true, list: await mergeLeadLists(pool, auth.userId, req.params.id, b.sourceIds, b.name ?? null) });
+    } catch (err) {
+      handle(res, err, 'sales_list_merge_failed', 'Failed to merge lists');
     }
   });
 

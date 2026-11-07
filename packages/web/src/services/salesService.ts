@@ -243,7 +243,8 @@ export interface WorkspaceLead {
   timezone: string | null;
   last_contacted_at: string | null;
   custom_data: Record<string, unknown>;
-  lists: Array<{ id: string; name: string; color: string | null }>;
+  /** field_keys: the custom columns linked to that list. */
+  lists: Array<{ id: string; name: string; color: string | null; field_keys?: string[] }>;
   last_response_status: ResponseStatus | null;
   last_activity_at: string | null;
   next_followup_at: string | null;
@@ -312,6 +313,46 @@ export interface SalesCallAttempt {
   first_name?: string | null;
   last_name?: string | null;
   phone?: string | null;
+  contact_id?: string | null;
+  ended_at?: string | null;
+  call_type?: CallType | null;
+  call_note?: string | null;
+  recording_url?: string | null;
+  transcript?: string | null;
+  /** The Analyst's summary, once the call has been analysed. */
+  summary?: string | null;
+}
+
+export const CALL_TYPES = ['sales', 'follow_up', 'reminder_meeting', 'reminder_payment', 'reminder_followup'] as const;
+export type CallType = (typeof CALL_TYPES)[number];
+export const CALL_TYPE_LABELS: Record<CallType, string> = {
+  sales: 'Sales call',
+  follow_up: 'Follow-up call',
+  reminder_meeting: 'Meeting / appointment reminder',
+  reminder_payment: 'Payment / deadline reminder',
+  reminder_followup: 'Scheduled follow-up reminder',
+};
+export const CALL_TYPE_HINTS: Record<CallType, string> = {
+  sales: 'What should the AI try to achieve? e.g. "Introduce our accounting course and book a demo."',
+  follow_up: 'Anything to pick up from last time? e.g. "They asked for the price list last week."',
+  reminder_meeting: 'Which meeting? e.g. "Onboarding session, Tuesday 14 May, 10am, Zoom link sent by email."',
+  reminder_payment: 'What is due? e.g. "Balance of GHS 500 for the June cohort, due Friday." The sheet row is read too.',
+  reminder_followup: 'What was the follow-up about? The lead\'s open reminders and activity are read too.',
+};
+
+export interface CallApproval {
+  id: string;
+  contact_id: string;
+  call_type: CallType | null;
+  call_note: string | null;
+  objective: string | null;
+  run_at: string;
+  created_at: string;
+  followup_id: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  lists: string[];
 }
 
 export interface SalesCallPolicy {
@@ -334,6 +375,8 @@ export interface SalesCallPolicy {
   fromNumber: string | null;
   voiceId: string | null;
   maxCallDurationSec: number;
+  /** Bulk and AI-booked calls wait for approval before they dial. */
+  requireCallApproval: boolean;
 }
 
 export type CallDecision =
@@ -661,6 +704,16 @@ export const salesService = {
     return assertSuccess(await api.get<{ success: boolean; error?: string; keys: string[] }>(`/api/sales/lists/${listId}/fields`)).keys;
   },
 
+  /** Saves the column editor for one list: new columns are linked to it, left-out ones only unlinked. */
+  async saveListFields(listId: string, fields: Array<Pick<LeadField, 'label' | 'type'> & { key?: string | null; options?: string[] | null; width?: number | null; hidden?: boolean }>) {
+    return assertSuccess(await api.put<{ success: boolean; error?: string; fields: LeadField[]; keys: string[] }>(`/api/sales/lists/${listId}/fields`, { fields }));
+  },
+
+  /** Moves the leads and columns of sourceIds into targetId, then deletes the sources. */
+  async mergeLeadLists(targetId: string, sourceIds: string[], name?: string | null) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; list: LeadList }>(`/api/sales/lists/${targetId}/merge`, { sourceIds, name })).list;
+  },
+
   async saveLeadFields(fields: Array<Pick<LeadField, 'label' | 'type'> & { key?: string | null; options?: string[] | null; width?: number | null; hidden?: boolean }>) {
     return assertSuccess(await api.put<{ success: boolean; error?: string; fields: LeadField[] }>('/api/sales/fields', { fields })).fields;
   },
@@ -704,13 +757,43 @@ export const salesService = {
     );
   },
 
-  async queueCall(contactId: string, objective?: string) {
+  async queueCall(contactId: string, objective?: string, opts?: { callType?: CallType; note?: string }) {
     return assertSuccess(
       await api.post<{ success: boolean; error?: string; queued: boolean; decision: CallDecision }>(
         '/api/sales/calls/queue',
-        { contact_id: contactId, objective },
+        { contact_id: contactId, objective, call_type: opts?.callType, note: opts?.note },
       ),
     );
+  },
+
+  /** Prepares AI calls for many leads; they wait for approval unless the policy turns that off. */
+  async queueCallsBulk(contactIds: string[], payload: { callType: CallType; note?: string; objective?: string }) {
+    return assertSuccess(
+      await api.post<{ success: boolean; error?: string; prepared: number; awaitingApproval: boolean; blocked: Array<{ contact_id: string; reason: string }> }>(
+        '/api/sales/calls/queue-bulk',
+        { contact_ids: contactIds, call_type: payload.callType, note: payload.note, objective: payload.objective },
+      ),
+    );
+  },
+
+  async listCallApprovals() {
+    return assertSuccess(await api.get<{ success: boolean; error?: string; calls: CallApproval[] }>('/api/sales/calls/approvals')).calls;
+  },
+
+  async approveCalls(ids: string[]) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; approved: number }>('/api/sales/calls/approve', { ids })).approved;
+  },
+
+  async declineCalls(ids: string[]) {
+    return assertSuccess(await api.post<{ success: boolean; error?: string; declined: number }>('/api/sales/calls/decline', { ids })).declined;
+  },
+
+  async getCallBrief(id: string) {
+    return assertSuccess(await api.get<{ success: boolean; error?: string; brief: { systemPrompt: string; firstMessage: string | null; objective: string | null } }>(`/api/sales/calls/${id}/brief`)).brief;
+  },
+
+  async listLeadCalls(contactId: string) {
+    return assertSuccess(await api.get<{ success: boolean; error?: string; calls: SalesCallAttempt[] }>(`/api/sales/calls?contactId=${encodeURIComponent(contactId)}`)).calls;
   },
 
   async listCalls() {

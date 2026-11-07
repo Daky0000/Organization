@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlarmClock, AlertTriangle, CheckSquare, Columns, FolderPlus, Inbox, Layers, Loader2, Pencil, Plus, Search, Sparkles,
+  AlarmClock, AlertTriangle, CheckSquare, Columns, FolderPlus, Inbox, Layers, Loader2, Merge, Pencil, PhoneCall, Plus, Search, Sparkles,
   Trash2, Upload, UserPlus, Users, X,
 } from 'lucide-react';
 import {
@@ -11,6 +11,8 @@ import LeadGrid, { type GroupBy } from '../components/sales/leads/LeadGrid';
 import LeadDrawer from '../components/sales/leads/LeadDrawer';
 import ColumnManager from '../components/sales/leads/ColumnManager';
 import ImportWizard from '../components/sales/leads/ImportWizard';
+import AiCallDialog from '../components/sales/leads/AiCallDialog';
+import CallApprovalQueue from '../components/sales/leads/CallApprovalQueue';
 import { useLeadParam } from '../components/sales/leads/useLeadParam';
 
 type View =
@@ -131,6 +133,55 @@ function DeleteListsDialog({ lists, onCancel, onConfirm }: {
   );
 }
 
+function MergeListsDialog({ lists, onCancel, onConfirm }: {
+  lists: LeadList[];
+  onCancel: () => void;
+  onConfirm: (targetId: string, name: string | null) => Promise<void>;
+}) {
+  // Default target: the biggest list, so the fewest leads move.
+  const biggest = [...lists].sort((a, b) => (b.lead_count ?? 0) - (a.lead_count ?? 0))[0];
+  const [targetId, setTargetId] = useState(biggest?.id ?? '');
+  const target = lists.find((l) => l.id === targetId);
+  const [name, setName] = useState(biggest?.name ?? '');
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    const trimmed = name.trim();
+    try { await onConfirm(targetId, trimmed && trimmed !== target?.name ? trimmed : null); } finally { setBusy(false); }
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" role="dialog" aria-modal="true" aria-labelledby="merge-lists-title">
+      <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-xl">
+        <h2 id="merge-lists-title" className="text-lg font-bold text-slate-900">Merge {lists.length} lists</h2>
+        <p className="text-sm text-slate-600">All leads and columns move into the list you keep. The other lists are removed. No leads are deleted.</p>
+        <fieldset className="max-h-48 space-y-1 overflow-y-auto">
+          <legend className="mb-1 text-xs font-semibold text-slate-500">Keep</legend>
+          {lists.map((l) => (
+            <label key={l.id} className="flex items-center gap-2 rounded-lg px-2 py-1 text-sm text-slate-700 hover:bg-slate-50">
+              <input type="radio" name="merge-target" checked={targetId === l.id}
+                onChange={() => { setTargetId(l.id); setName(l.name); }} />
+              <span className="min-w-0 flex-1 truncate">{l.name}</span>
+              <span className="text-xs text-slate-400">{l.lead_count}</span>
+            </label>
+          ))}
+        </fieldset>
+        <label className="block text-xs font-semibold text-slate-500">
+          Name of the merged list
+          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={120}
+            className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-normal text-slate-800" />
+        </label>
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={busy} className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">Cancel</button>
+          <button type="button" onClick={() => void go()} disabled={busy || !targetId}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60">
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Merge size={14} />} Merge lists
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SalesLeadWorkspace() {
   const [view, setView] = useState<View>({ kind: 'all' });
   const [lists, setLists] = useState<LeadList[]>([]);
@@ -154,6 +205,15 @@ export default function SalesLeadWorkspace() {
   const [selectingLists, setSelectingLists] = useState(false);
   const [pickedLists, setPickedLists] = useState<Set<string>>(new Set());
   const [confirmListDelete, setConfirmListDelete] = useState(false);
+  const [confirmListMerge, setConfirmListMerge] = useState(false);
+  const [bulkCalling, setBulkCalling] = useState(false);
+  const [showApprovals, setShowApprovals] = useState(false);
+  const [approvalCount, setApprovalCount] = useState(0);
+  const [callNotice, setCallNotice] = useState<string | null>(null);
+  const loadApprovals = useCallback(async () => {
+    try { setApprovalCount((await salesService.listCallApprovals()).length); } catch { /* banner is optional */ }
+  }, []);
+  useEffect(() => { void loadApprovals(); }, [loadApprovals]);
 
   const loadMeta = useCallback(async () => {
     try {
@@ -264,6 +324,19 @@ export default function SalesLeadWorkspace() {
     return n;
   });
   const visibleLists = lists.filter((l) => !l.archived_at);
+  const mergeLists = async (targetId: string, name: string | null) => {
+    const sources = [...pickedLists].filter((id) => id !== targetId);
+    try {
+      await salesService.mergeLeadLists(targetId, sources, name);
+      setConfirmListMerge(false);
+      stopSelectingLists();
+      setView({ kind: 'list', id: targetId });
+      refresh();
+    } catch (err) {
+      setConfirmListMerge(false);
+      setError(err instanceof Error ? err.message : 'Failed to merge lists');
+    }
+  };
   const removeLists = async (deleteLeads: boolean) => {
     const ids = [...pickedLists];
     try {
@@ -317,10 +390,17 @@ export default function SalesLeadWorkspace() {
                   onChange={(e) => setPickedLists(e.target.checked ? new Set(visibleLists.map((l) => l.id)) : new Set())} />
                 {pickedLists.size ? `${pickedLists.size} selected` : 'Select all'}
               </label>
-              <button type="button" disabled={!pickedLists.size} onClick={() => setConfirmListDelete(true)}
-                className="inline-flex items-center gap-1 font-semibold text-rose-600 disabled:text-slate-300">
-                <Trash2 size={12} /> Delete
-              </button>
+              <span className="flex items-center gap-2.5">
+                <button type="button" disabled={pickedLists.size < 2} onClick={() => setConfirmListMerge(true)}
+                  title={pickedLists.size < 2 ? 'Select two or more lists to merge' : undefined}
+                  className="inline-flex items-center gap-1 font-semibold text-blue-600 disabled:text-slate-300">
+                  <Merge size={12} /> Merge
+                </button>
+                <button type="button" disabled={!pickedLists.size} onClick={() => setConfirmListDelete(true)}
+                  className="inline-flex items-center gap-1 font-semibold text-rose-600 disabled:text-slate-300">
+                  <Trash2 size={12} /> Delete
+                </button>
+              </span>
             </div>
           )}
           {newList && <NewListForm onCreated={(l) => { setNewList(false); void loadMeta(); setView({ kind: 'list', id: l.id }); }} onCancel={() => setNewList(false)} />}
@@ -372,7 +452,7 @@ export default function SalesLeadWorkspace() {
               <Upload size={14} /> Import
             </button>
             <button type="button" onClick={() => setShowColumns(true)} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-              <Columns size={14} /> Columns
+              <Columns size={14} /> {activeList ? 'List columns' : 'Columns'}
             </button>
             <button type="button" onClick={() => setAdding((v) => !v)} className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white">
               <UserPlus size={14} /> Add lead
@@ -432,10 +512,28 @@ export default function SalesLeadWorkspace() {
               <option value="">Set stage…</option>
               {LEAD_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
+            <button type="button" onClick={() => setBulkCalling(true)} className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-2 py-1 text-xs font-semibold text-white">
+              <PhoneCall size={12} /> AI call
+            </button>
             <button type="button" onClick={() => void bulk('delete')} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50">
               <Trash2 size={12} /> Delete
             </button>
             <button type="button" onClick={() => setSelected(new Set())} className="ml-auto text-blue-700"><X size={14} /></button>
+          </div>
+        )}
+
+        {approvalCount > 0 && (
+          <button type="button" onClick={() => setShowApprovals(true)}
+            className="flex w-full items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-left text-sm text-amber-900 hover:bg-amber-100">
+            <PhoneCall size={15} className="shrink-0" />
+            <span className="flex-1"><b>{approvalCount}</b> AI call{approvalCount === 1 ? '' : 's'} waiting for your approval</span>
+            <span className="font-semibold">Review</span>
+          </button>
+        )}
+        {callNotice && (
+          <div className="flex items-start gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-800">
+            <span className="flex-1">{callNotice}</span>
+            <button type="button" onClick={() => setCallNotice(null)} aria-label="Dismiss" className="text-blue-500"><X size={14} /></button>
           </div>
         )}
 
@@ -489,7 +587,32 @@ export default function SalesLeadWorkspace() {
           onConfirm={(deleteLeads) => removeLists(deleteLeads)}
         />
       )}
-      <ColumnManager open={showColumns} fields={fields} onClose={() => setShowColumns(false)} onSaved={(f) => { setFields(f); void load(false); }} />
+      {bulkCalling && (
+        <AiCallDialog contactIds={[...selected]} onClose={() => setBulkCalling(false)}
+          onDone={(m) => { setCallNotice(m); setSelected(new Set()); void loadApprovals(); }} />
+      )}
+      {showApprovals && (
+        <CallApprovalQueue onClose={() => { setShowApprovals(false); void loadApprovals(); }} onChanged={() => void loadApprovals()} />
+      )}
+      {confirmListMerge && (
+        <MergeListsDialog
+          lists={visibleLists.filter((l) => pickedLists.has(l.id))}
+          onCancel={() => setConfirmListMerge(false)}
+          onConfirm={(targetId, name) => mergeLists(targetId, name)}
+        />
+      )}
+      <ColumnManager
+        open={showColumns}
+        fields={activeList ? tableFields : fields}
+        allFields={fields}
+        list={activeList ? { id: activeList.id, name: activeList.name } : null}
+        onClose={() => setShowColumns(false)}
+        onSaved={(f, keys) => {
+          if (activeList && keys) setListKeys({ listId: activeList.id, keys: new Set(keys) });
+          setFields(f);
+          void load(false);
+        }}
+      />
       {showImport && (
         <ImportWizard onClose={() => setShowImport(false)} onImported={() => { setShowImport(false); refresh(); }} />
       )}

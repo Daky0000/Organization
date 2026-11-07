@@ -4959,6 +4959,63 @@ async function createSalesLeadWorkspaceTables(pool: Pool): Promise<void> {
       UNIQUE (user_id, key)
     )`);
 
+  // Which custom columns belong to which list. Columns are defined once per
+  // user (sales_lead_fields); a list's table and its leads' detail panel show
+  // only the columns linked here, so sheets imported from one workbook keep
+  // their own headers.
+  await step('sales_lead_list_fields', `
+    CREATE TABLE IF NOT EXISTS sales_lead_list_fields (
+      list_id    TEXT NOT NULL REFERENCES sales_lead_lists(id) ON DELETE CASCADE,
+      field_key  TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (list_id, field_key)
+    )`);
+  // Lists that existed before links did get theirs inferred once from the
+  // values their leads hold; fields_scoped marks a list as done so a column
+  // the user later removes from a list is never re-added. New lists start done.
+  await step('sales_lead_lists_fields_scoped', `
+    ALTER TABLE sales_lead_lists ADD COLUMN IF NOT EXISTS fields_scoped BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE sales_lead_lists ALTER COLUMN fields_scoped SET DEFAULT true`);
+  await step('sales_lead_list_fields_backfill', `
+    WITH pending AS (
+      SELECT id, user_id FROM sales_lead_lists WHERE fields_scoped = false
+    ), links AS (
+      INSERT INTO sales_lead_list_fields (list_id, field_key)
+      SELECT DISTINCT l.id, f.key
+        FROM pending l
+        JOIN sales_lead_fields f ON f.user_id = l.user_id AND f.builtin = false
+       WHERE EXISTS (
+         SELECT 1 FROM sales_lead_list_members m
+           JOIN sales_lead_profiles p ON p.contact_id = m.contact_id AND p.user_id = l.user_id
+          WHERE m.list_id = l.id AND COALESCE(p.custom_data->>f.key, '') <> ''
+       )
+      ON CONFLICT DO NOTHING
+    )
+    UPDATE sales_lead_lists SET fields_scoped = true WHERE id IN (SELECT id FROM pending)`);
+
+  // AI calls from the lead workspace: what kind of call it is, the user's note
+  // for it, and an approval gate. 'awaiting_approval' attempts are never dialled
+  // until someone approves them; the dial worker only claims 'queued'.
+  await step('sales_call_attempts.call_type', `ALTER TABLE sales_call_attempts ADD COLUMN IF NOT EXISTS call_type TEXT`);
+  await step('sales_call_attempts.call_note', `ALTER TABLE sales_call_attempts ADD COLUMN IF NOT EXISTS call_note TEXT`);
+  await step('sales_call_attempts.status_awaiting_approval', `
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = 'sales_call_attempts'::regclass AND contype = 'c'
+           AND pg_get_constraintdef(oid) LIKE '%awaiting_approval%'
+      ) THEN
+        ALTER TABLE sales_call_attempts DROP CONSTRAINT IF EXISTS sales_call_attempts_status_check;
+        ALTER TABLE sales_call_attempts ADD CONSTRAINT sales_call_attempts_status_check
+          CHECK (status IN ('awaiting_approval','queued','dialing','in_progress','completed','cancelled','blocked','failed'));
+      END IF;
+    END $$`);
+  await step('sales_call_attempts_approval_idx', `CREATE INDEX IF NOT EXISTS sales_call_attempts_approval_idx
+    ON sales_call_attempts (user_id, created_at DESC) WHERE status = 'awaiting_approval'`);
+  await step('sales_call_policies.require_call_approval',
+    `ALTER TABLE sales_call_policies ADD COLUMN IF NOT EXISTS require_call_approval BOOLEAN NOT NULL DEFAULT true`);
+
   // One digest per user per local day; the row is the claim.
   await step('sales_digest_log', `
     CREATE TABLE IF NOT EXISTS sales_digest_log (

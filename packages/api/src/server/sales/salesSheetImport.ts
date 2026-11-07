@@ -21,7 +21,7 @@ import { createHash, randomUUID } from 'crypto';
 import type { Pool } from 'pg';
 import { parseWorkbook, SpreadsheetError, type SheetGrid } from '../leads/services/spreadsheet.ts';
 import { ActivityError, type ResponseStatus } from './leadActivities.ts';
-import { findOrCreateLeadList, slugifyKey, type ListSourceType } from './leadWorkspace.ts';
+import { findOrCreateLeadList, linkListFields, slugifyKey, type ListSourceType } from './leadWorkspace.ts';
 import { analyzeSheetsWithAI, NoSheetAnalystError } from './sheetAnalyst.ts';
 import { logger } from '../../logger.ts';
 
@@ -390,6 +390,8 @@ export async function commitImport(pool: Pool, userId: string, input: { fileBase
     try {
       await client.query('BEGIN');
       const list = await findOrCreateLeadList(client, userId, listName, cb.sourceType);
+      // This section's columns belong to this list only.
+      await linkListFields(client, userId, list.id, customs.map((c) => c.key));
       // Several sections can share one list (grouped by worksheet, or all in one).
       if (!summary.lists.includes(list.name)) summary.lists.push(list.name);
       const maxRound = rounds.reduce((m, r) => Math.max(m, r.round), 0);

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, Mail, Phone, Plus, X } from 'lucide-react';
+import { Loader2, Mail, Phone, PhoneCall, Plus, X } from 'lucide-react';
 import {
   LEAD_STAGES, salesService,
   type LeadField, type LeadList, type WorkspaceLead,
 } from '../../../services/salesService';
 import ActivityTimeline from './ActivityTimeline';
+import AiCallDialog from './AiCallDialog';
+import LeadCalls from './LeadCalls';
 import { CellEditor, LeadCell, cellPatch, editableText, fullName } from './LeadGrid';
 
 function FieldRow({ lead, field, onSave }: { lead: WorkspaceLead; field: LeadField; onSave: (patch: Record<string, unknown>) => Promise<void> }) {
@@ -42,6 +44,9 @@ export default function LeadDrawer({
   const [error, setError] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState<{ first: string; last: string } | null>(null);
   const [addingList, setAddingList] = useState(false);
+  const [calling, setCalling] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [callsKey, setCallsKey] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -80,7 +85,21 @@ export default function LeadDrawer({
     }
   };
 
-  const editable = fields.filter((f) => !f.builtin || ['email', 'phone', 'stage'].includes(f.key));
+  // Same columns the lead's list shows: the custom columns linked to any list
+  // the lead is in, plus any column it already holds a value in (never hide
+  // data). A lead in no list shows every column.
+  const linked = lead && lead.lists.length
+    ? new Set(lead.lists.flatMap((l) => l.field_keys ?? []))
+    : null;
+  const hasValue = (key: string) => {
+    const v = lead?.custom_data?.[key];
+    return v !== null && v !== undefined && v !== '';
+  };
+  const editable = fields.filter((f) => (
+    f.builtin
+      ? ['email', 'phone', 'stage'].includes(f.key)
+      : !f.hidden && (!linked || linked.has(f.key) || hasValue(f.key))
+  ));
   const otherLists = lists.filter((l) => !l.archived_at && !lead?.lists.some((x) => x.id === l.id));
 
   return (
@@ -108,6 +127,12 @@ export default function LeadDrawer({
               <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
                 {lead.phone && <a href={`tel:${lead.phone.replace(/\s/g, '')}`} className="inline-flex items-center gap-1 hover:text-blue-600"><Phone size={12} />{lead.phone}</a>}
                 {lead.email && <a href={`mailto:${lead.email}`} className="inline-flex items-center gap-1 hover:text-blue-600"><Mail size={12} />{lead.email}</a>}
+                {lead.phone && (
+                  <button type="button" onClick={() => setCalling(true)}
+                    className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2 py-0.5 font-semibold text-white hover:bg-blue-700">
+                    <PhoneCall size={12} /> AI call
+                  </button>
+                )}
               </div>
             </div>
           ) : <Loader2 size={18} className="animate-spin text-slate-400" />}
@@ -115,6 +140,11 @@ export default function LeadDrawer({
         </div>
 
         {error && <p className="mx-5 mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+        {notice && <p className="mx-5 mt-3 rounded-xl bg-blue-50 px-3 py-2 text-sm text-blue-800">{notice}</p>}
+        {calling && lead && (
+          <AiCallDialog contactIds={[contactId]} leadName={fullName(lead)} onClose={() => setCalling(false)}
+            onDone={(m) => { setNotice(m); setCallsKey((k) => k + 1); }} />
+        )}
 
         {lead && (
           <div className="space-y-4 p-5">
@@ -143,10 +173,12 @@ export default function LeadDrawer({
                 {editable.map((f) => <FieldRow key={f.key} lead={lead} field={f} onSave={save} />)}
               </div>
               {!editable.some((f) => !f.builtin) && (
-                <p className="mt-2 text-xs text-slate-400">Add your own columns (role, company, amount paid…) with "Columns" on the leads page.</p>
+                <p className="mt-2 text-xs text-slate-400">Add your own columns (role, company, amount paid…) with "Columns" on the list's page.</p>
               )}
               <p className="mt-2 text-[11px] text-slate-400">Stage: {LEAD_STAGES.includes(lead.stage as any) ? lead.stage : 'new'} · added {new Date(lead.created_at).toLocaleDateString()}</p>
             </section>
+
+            <LeadCalls contactId={contactId} refreshKey={callsKey} />
 
             <ActivityTimeline contactId={contactId} onChanged={() => { void load(); onChanged(); }} />
           </div>

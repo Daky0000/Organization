@@ -16,8 +16,10 @@ import { buildSalesEngine, type SalesEngine } from './sales/salesEngine.ts';
 import { scoreCallWindows } from './sales/callTiming.ts';
 import { runInsightAgent } from './sales/insightAgent.ts';
 import {
+  CALL_TYPES,
   LEAD_STAGES,
   OBJECTION_LABELS,
+  isCallType,
   isLeadStage,
   type LeadStage,
 } from './sales/types.ts';
@@ -476,9 +478,14 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
     const auth = requireAuth(req, res);
     if (!auth) return;
     try {
-      const { contact_id, objective } = req.body ?? {};
+      const { contact_id, objective, call_type, note } = req.body ?? {};
       if (!contact_id) return fail(res, 400, 'contact_id is required');
-      const result = await salesEngine.queueCall({ userId: auth.userId, contactId: contact_id, objective });
+      if (call_type != null && !isCallType(call_type)) return fail(res, 400, `call_type must be one of: ${CALL_TYPES.join(', ')}`);
+      // One click on one lead is the approval — the call goes straight to the queue.
+      const result = await salesEngine.queueCall({
+        userId: auth.userId, contactId: contact_id, objective,
+        callType: call_type ?? null, note: typeof note === 'string' ? note : null,
+      });
       res.json({ success: true, ...result });
     } catch (err) {
       logger.error({ err }, 'sales_call_queue_failed');
@@ -486,18 +493,128 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
     }
   });
 
-  router.get('/calls', async (req, res) => {
+  /**
+   * Prepare AI calls for many leads at once. Each one lands in the approval
+   * queue (unless the policy turns approval off) and is dialled only after
+   * someone approves it.
+   */
+  router.post('/calls/queue-bulk', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      const { contact_ids, objective, call_type, note } = req.body ?? {};
+      if (!Array.isArray(contact_ids) || !contact_ids.length) return fail(res, 400, 'Select at least one lead');
+      if (contact_ids.length > 500) return fail(res, 400, 'At most 500 leads at a time');
+      if (call_type != null && !isCallType(call_type)) return fail(res, 400, `call_type must be one of: ${CALL_TYPES.join(', ')}`);
+      const policy = await salesEngine.getPolicy(auth.userId);
+      const ids = [...new Set(contact_ids.map(String))];
+      const { rows: owned } = await pool.query(
+        `SELECT id FROM mailing_contacts WHERE user_id=$1 AND id = ANY($2::text[])`, [auth.userId, ids],
+      );
+      let prepared = 0;
+      const blocked: { contact_id: string; reason: string }[] = [];
+      for (const { id } of owned) {
+        const r = await salesEngine.queueCall({
+          userId: auth.userId, contactId: id,
+          objective: typeof objective === 'string' && objective.trim() ? objective.trim().slice(0, 500) : null,
+          callType: call_type ?? null, note: typeof note === 'string' ? note : null,
+          awaitApproval: policy.requireCallApproval,
+        });
+        if (r.queued) prepared += 1;
+        else blocked.push({ contact_id: id, reason: r.decision.action === 'stop' ? r.decision.reason : 'blocked' });
+      }
+      res.json({ success: true, prepared, awaitingApproval: policy.requireCallApproval, blocked });
+    } catch (err) {
+      logger.error({ err }, 'sales_call_queue_bulk_failed');
+      fail(res, 500, 'Failed to prepare calls');
+    }
+  });
+
+  router.get('/calls/approvals', async (req, res) => {
     const auth = requireAuth(req, res);
     if (!auth) return;
     try {
       const { rows } = await pool.query(
-        `SELECT a.id, a.status, a.outcome, a.provider, a.run_at, a.started_at, a.duration_sec,
-                a.block_reason, a.last_error, a.objective, c.first_name, c.last_name, c.phone
+        `SELECT a.id, a.contact_id, a.call_type, a.call_note, a.objective, a.run_at, a.created_at, a.followup_id,
+                c.first_name, c.last_name, c.phone,
+                COALESCE((SELECT json_agg(l.name ORDER BY l.name) FROM sales_lead_list_members m
+                           JOIN sales_lead_lists l ON l.id=m.list_id WHERE m.contact_id=a.contact_id), '[]'::json) AS lists
+           FROM sales_call_attempts a
+           JOIN mailing_contacts c ON c.id = a.contact_id
+          WHERE a.user_id=$1 AND a.status='awaiting_approval'
+          ORDER BY a.created_at ASC LIMIT 500`,
+        [auth.userId],
+      );
+      res.json({ success: true, calls: rows });
+    } catch (err) {
+      logger.error({ err }, 'sales_call_approvals_failed');
+      fail(res, 500, 'Failed to load calls waiting for approval');
+    }
+  });
+
+  router.post('/calls/approve', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+      if (!ids.length) return fail(res, 400, 'Choose at least one call');
+      res.json({ success: true, approved: await salesEngine.approveCalls(auth.userId, ids) });
+    } catch (err) {
+      logger.error({ err }, 'sales_call_approve_failed');
+      fail(res, 500, 'Failed to approve calls');
+    }
+  });
+
+  router.post('/calls/decline', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+      if (!ids.length) return fail(res, 400, 'Choose at least one call');
+      res.json({ success: true, declined: await salesEngine.declineCalls(auth.userId, ids) });
+    } catch (err) {
+      logger.error({ err }, 'sales_call_decline_failed');
+      fail(res, 500, 'Failed to decline calls');
+    }
+  });
+
+  /** The exact brief the voice agent would get for this call — what you approve. */
+  router.get('/calls/:id/brief', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      const { rows } = await pool.query(
+        `SELECT contact_id, objective, call_type, call_note, brief FROM sales_call_attempts WHERE id=$1 AND user_id=$2`,
+        [req.params.id, auth.userId],
+      );
+      const a = rows[0];
+      if (!a?.contact_id) return fail(res, 404, 'Call not found');
+      const brief = a.brief
+        ? { systemPrompt: a.brief as string, firstMessage: null, objective: a.objective }
+        : await salesEngine.buildCallBriefFor(auth.userId, a.contact_id, { objective: a.objective, callType: a.call_type, note: a.call_note });
+      res.json({ success: true, brief });
+    } catch (err) {
+      logger.error({ err }, 'sales_call_brief_failed');
+      fail(res, 500, 'Failed to build the call brief');
+    }
+  });
+
+  router.get('/calls', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      const contactId = typeof req.query.contactId === 'string' && req.query.contactId ? req.query.contactId : null;
+      const { rows } = await pool.query(
+        `SELECT a.id, a.contact_id, a.status, a.outcome, a.provider, a.run_at, a.started_at, a.ended_at, a.duration_sec,
+                a.block_reason, a.last_error, a.objective, a.call_type, a.call_note,
+                a.recording_url, a.transcript, sc.summary,
+                c.first_name, c.last_name, c.phone
            FROM sales_call_attempts a
            LEFT JOIN mailing_contacts c ON c.id = a.contact_id
-          WHERE a.user_id=$1
+           LEFT JOIN sales_conversations sc ON sc.id = a.conversation_id
+          WHERE a.user_id=$1 AND a.is_test = false AND ($2::text IS NULL OR a.contact_id=$2)
           ORDER BY a.created_at DESC LIMIT 100`,
-        [auth.userId],
+        [auth.userId, contactId],
       );
       res.json({ success: true, calls: rows });
     } catch (err) {
@@ -642,6 +759,7 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
            voice_id=COALESCE($16, voice_id),
            max_call_duration_sec=COALESCE($17, max_call_duration_sec),
            blackout_dates=COALESCE($18::text[], blackout_dates),
+           require_call_approval=COALESCE($20, require_call_approval),
            updated_at=NOW()
          WHERE user_id=$19`,
         [
@@ -657,6 +775,7 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
           b.provider ?? null, b.fromNumber ?? null, b.voiceId ?? null, b.maxCallDurationSec ?? null,
           Array.isArray(b.blackoutDates) ? b.blackoutDates.map(String) : null,
           auth.userId,
+          typeof b.requireCallApproval === 'boolean' ? b.requireCallApproval : null,
         ],
       );
       const policy = await salesEngine.getPolicy(auth.userId);

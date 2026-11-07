@@ -19,9 +19,10 @@ import { logger } from '../../logger.ts';
 import { applyDisclosures, buildCallBrief } from './callBrief.ts';
 import { decideCallAction, localBucket, nextPermittedSlot, type CallDecision } from './callPolicy.ts';
 import { runAnalyst } from './analystAgent.ts';
+import { displayValue, getLeadSheetContext } from './leadSheetContext.ts';
 import { runInsightAgent } from './insightAgent.ts';
 import { applySalesOps, recordAgentRun, validateSalesOps } from './salesOps.ts';
-import { policyFromRow, type LeadStage, type SalesCallPolicy } from './types.ts';
+import { isCallType, policyFromRow, type CallType, type LeadStage, type SalesCallPolicy } from './types.ts';
 import { SimulatorProvider } from './providers/simulator.ts';
 import { VapiProvider } from './providers/vapi.ts';
 import type { CallEvent, CallProvider } from './providers/index.ts';
@@ -29,6 +30,26 @@ import type { CallEvent, CallProvider } from './providers/index.ts';
 export interface SalesEngineDeps {
   pool: Pool;
   getPlatformConfig: (platform: string) => Promise<Record<string, string>>;
+}
+
+/** Maps the Analyst's intent onto the workspace's "Last outcome" vocabulary. */
+function responseStatusForIntent(intent: string): string {
+  switch (intent) {
+    case 'interested':
+    case 'needs_info':
+    case 'meeting_booked':
+      return 'interested';
+    case 'callback_requested':
+    case 'undecided':
+      return 'call_back';
+    case 'wrong_number':
+      return 'unreachable';
+    case 'not_interested':
+    case 'do_not_call':
+      return 'not_interested';
+    default:
+      return 'call_back';
+  }
 }
 
 const ANALYSIS_BATCH = 5;
@@ -118,7 +139,7 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
       pool.query(
         `SELECT COUNT(*)::int AS n FROM sales_call_attempts
           WHERE user_id=$1 AND created_at >= date_trunc('day', NOW())
-            AND status <> 'blocked' AND is_test = false`,
+            AND status NOT IN ('blocked','awaiting_approval','cancelled') AND is_test = false`,
         [userId],
       ),
       pool.query(
@@ -188,8 +209,15 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     contactId: string;
     objective?: string | null;
     followUpId?: string | null;
+    callType?: CallType | null;
+    /** The user's instructions for this one call (what to remind them about, etc.). */
+    note?: string | null;
+    /** Park the call in the approval queue instead of letting the worker dial it. */
+    awaitApproval?: boolean;
     now?: Date;
-  }): Promise<{ queued: boolean; attemptId: string | null; decision: CallDecision }> {
+  }): Promise<{ queued: boolean; awaitingApproval: boolean; attemptId: string | null; decision: CallDecision }> {
+    const callType = isCallType(params.callType) ? params.callType : null;
+    const note = params.note?.trim().slice(0, 2000) || null;
     const now = params.now ?? new Date();
     const ctx = await evaluateGate(params.userId, params.contactId, now);
     const leadProfileId = ctx.leadProfileId ?? (await ensureLeadProfile(params.userId, params.contactId));
@@ -198,27 +226,65 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
       const { rows } = await pool.query(
         `INSERT INTO sales_call_attempts
            (id, user_id, contact_id, lead_profile_id, followup_id, provider, objective,
-            status, outcome, block_reason, run_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'blocked','blocked',$8,NOW()) RETURNING id`,
+            status, outcome, block_reason, run_at, call_type, call_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'blocked','blocked',$8,NOW(),$9,$10) RETURNING id`,
         [
           randomUUID(), params.userId, params.contactId, leadProfileId, params.followUpId ?? null,
           ctx.policy.provider, params.objective ?? null, `${ctx.decision.code}: ${ctx.decision.reason}`,
+          callType, note,
         ],
       );
-      return { queued: false, attemptId: rows[0]?.id ?? null, decision: ctx.decision };
+      return { queued: false, awaitingApproval: false, attemptId: rows[0]?.id ?? null, decision: ctx.decision };
     }
 
     const runAt = ctx.decision.action === 'reschedule' ? ctx.decision.runAt : now;
     const { rows } = await pool.query(
       `INSERT INTO sales_call_attempts
-         (id, user_id, contact_id, lead_profile_id, followup_id, provider, to_number, objective, status, run_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9) RETURNING id`,
+         (id, user_id, contact_id, lead_profile_id, followup_id, provider, to_number, objective, status, run_at, call_type, call_note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
       [
         randomUUID(), params.userId, params.contactId, leadProfileId, params.followUpId ?? null,
-        ctx.policy.provider, ctx.phone, params.objective ?? null, runAt,
+        ctx.policy.provider, ctx.phone, params.objective ?? null,
+        params.awaitApproval ? 'awaiting_approval' : 'queued', runAt, callType, note,
       ],
     );
-    return { queued: true, attemptId: rows[0]?.id ?? null, decision: ctx.decision };
+    return { queued: true, awaitingApproval: !!params.awaitApproval, attemptId: rows[0]?.id ?? null, decision: ctx.decision };
+  }
+
+  /**
+   * Release approved calls to the dial worker. The gate still runs again at
+   * dial time, so approving a call never bypasses call hours, caps or DNC.
+   */
+  async function approveCalls(userId: string, ids: string[]): Promise<number> {
+    if (!ids.length) return 0;
+    const { rowCount } = await pool.query(
+      `UPDATE sales_call_attempts
+          SET status='queued', run_at=GREATEST(run_at, NOW()), updated_at=NOW()
+        WHERE user_id=$1 AND id = ANY($2::text[]) AND status='awaiting_approval'`,
+      [userId, ids.slice(0, 500)],
+    );
+    return rowCount ?? 0;
+  }
+
+  /** Decline calls waiting for approval. A declined follow-up call cancels its follow-up. */
+  async function declineCalls(userId: string, ids: string[]): Promise<number> {
+    if (!ids.length) return 0;
+    const { rows } = await pool.query(
+      `UPDATE sales_call_attempts
+          SET status='cancelled', block_reason='declined', updated_at=NOW()
+        WHERE user_id=$1 AND id = ANY($2::text[]) AND status='awaiting_approval'
+        RETURNING followup_id`,
+      [userId, ids.slice(0, 500)],
+    );
+    const followUps = rows.map((r) => r.followup_id).filter(Boolean);
+    if (followUps.length) {
+      await pool.query(
+        `UPDATE sales_followups SET status='cancelled', last_error='call declined', updated_at=NOW()
+          WHERE user_id=$1 AND id = ANY($2::text[]) AND status IN ('due','scheduled')`,
+        [userId, followUps],
+      );
+    }
+    return rows.length;
   }
 
   // ─── Worker: dial due attempts ─────────────────────────────────────────────
@@ -233,7 +299,7 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
              WHERE status='queued' AND run_at <= NOW()
              ORDER BY run_at LIMIT ${CALL_BATCH} FOR UPDATE SKIP LOCKED
           )
-          RETURNING id, user_id, contact_id, followup_id, objective, to_number`,
+          RETURNING id, user_id, contact_id, followup_id, objective, to_number, call_type, call_note`,
         [],
       );
       claimed = rows;
@@ -276,6 +342,8 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
           userId: attempt.user_id,
           contactId: attempt.contact_id,
           objective: attempt.objective,
+          callType: attempt.call_type,
+          note: attempt.call_note,
         });
         const firstMessage = applyDisclosures(brief.firstMessage, ctx.policy);
         const bucket = localBucket(new Date(), ctx.timezone);
@@ -392,6 +460,22 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
       [engaged, attempt.contact_id, attempt.user_id],
     );
 
+    // A call nobody picked up still goes on the lead's timeline, so the list's
+    // "Last outcome" and activity log show the attempt.
+    if (!engaged) {
+      await pool.query(
+        `INSERT INTO crm_activities (id, user_id, contact_id, type, title, body, outcome, completed_at, response_status)
+         VALUES ($1,$2,$3,'call',$4,$5,$6,$7,$8)`,
+        [
+          randomUUID(), attempt.user_id, attempt.contact_id,
+          `AI call — ${String(event.outcome).replace(/_/g, ' ')}`,
+          event.endedReason ? `Ended: ${event.endedReason}` : null,
+          event.outcome, event.at,
+          event.outcome === 'invalid_number' ? 'unreachable' : 'no_answer',
+        ],
+      ).catch((err) => logger.warn({ err, attemptId: attempt.id }, 'sales_unanswered_activity_failed'));
+    }
+
     // Only a conversation that actually happened gets a record and an analysis.
     if (engaged && event.transcript && event.transcript.trim()) {
       const { rows: convRows } = await pool.query(
@@ -465,13 +549,24 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
           .filter(Boolean)
           .join('\n');
 
+        // The lead's sheet row and company: the Analyst may write values the
+        // lead stated back into these columns, and notes onto the company.
+        const sheet = await getLeadSheetContext(pool, conv.user_id, conv.contact_id).catch(() => null);
+        const sheetColumns = sheet?.columns.length
+          ? sheet.columns
+              .map((c) => `${c.key} | ${c.label} | ${c.type}${c.options?.length ? ` (one of: ${c.options.join(', ')})` : ''} | ${displayValue(c.value)}`)
+              .join('\n')
+          : undefined;
+        const companyLine = sheet?.company ? `\nCompany: ${sheet.company.name}` : '';
+
         const outcome = await runAnalyst({
           pool,
           userId: conv.user_id,
           transcript: conv.transcript,
-          leadContext,
+          leadContext: leadContext + companyLine,
           durationSec: conv.duration_sec,
           channel: conv.channel,
+          sheetColumns,
           currentStage: (profile.stage as LeadStage) ?? null,
         });
 
@@ -481,12 +576,15 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
         const validation = validateSalesOps(outcome.ops, {
           now: new Date(),
           requireApprovalFor: policy.requireApprovalFor,
+          sheetColumns: sheet?.columns ?? [],
+          companyId: sheet?.company?.id ?? null,
         });
         const applied = await applySalesOps(pool, validation.ok, {
           userId: conv.user_id,
           contactId: conv.contact_id,
           leadProfileId: conv.lead_profile_id,
           conversationId: conv.id,
+          companyId: sheet?.company?.id ?? null,
         });
 
         await pool.query(
@@ -507,14 +605,16 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
 
         // Mirror onto the CRM timeline so Companies/Pipeline light up without a
         // sync job — the whole reason this module extends the CRM contact.
+        // response_status is what the lead workspace shows as "Last outcome".
         const { rows: actRows } = await pool.query(
-          `INSERT INTO crm_activities (id, user_id, contact_id, type, title, body, outcome, duration, completed_at)
-           VALUES ($1,$2,$3,'call',$4,$5,$6,$7,NOW()) RETURNING id`,
+          `INSERT INTO crm_activities (id, user_id, contact_id, type, title, body, outcome, duration, completed_at, response_status)
+           VALUES ($1,$2,$3,'call',$4,$5,$6,$7,NOW(),$8) RETURNING id`,
           [
             randomUUID(), conv.user_id, conv.contact_id,
-            `Call — ${record.intent.replace(/_/g, ' ')}`,
+            `AI call — ${record.intent.replace(/_/g, ' ')}`,
             record.summary, record.recommended_action,
             conv.duration_sec ? Math.round(conv.duration_sec / 60) : null,
+            responseStatusForIntent(record.intent),
           ],
         );
         await pool.query(
@@ -596,11 +696,15 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
         // is a different consent question and is not in scope here.
         if (followUp.type !== 'phone_call') continue;
 
+        const policy = await getPolicy(followUp.user_id);
         const result = await queueCall({
           userId: followUp.user_id,
           contactId: followUp.contact_id,
           objective: followUp.objective,
           followUpId: followUp.id,
+          callType: 'follow_up',
+          // The AI booked this call, so a person approves it before it dials.
+          awaitApproval: policy.requireCallApproval,
         });
         if (!result.queued) {
           const decision = result.decision;
@@ -841,10 +945,13 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     getWebTestConfig,
     getVapiStatus,
     listTestCalls,
-    buildCallBriefFor: (userId: string, contactId: string) => buildCallBrief(pool, { userId, contactId }),
+    buildCallBriefFor: (userId: string, contactId: string, opts?: { objective?: string | null; callType?: string | null; note?: string | null }) =>
+      buildCallBrief(pool, { userId, contactId, ...opts }),
     ensureLeadProfile,
     evaluateGate,
     queueCall,
+    approveCalls,
+    declineCalls,
     handleProviderEvent,
     processDueCallAttempts,
     processPendingAnalyses,

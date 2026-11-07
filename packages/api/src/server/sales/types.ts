@@ -190,6 +190,20 @@ export interface SalesCallPolicy {
   fromNumber: string | null;
   voiceId: string | null;
   maxCallDurationSec: number;
+  /**
+   * When true, every AI call that a person did not start themselves (bulk
+   * queues, follow-ups the AI booked) waits in the approval queue until someone
+   * approves it. A call started with one click on a single lead is approved by
+   * that click.
+   */
+  requireCallApproval: boolean;
+}
+
+/** What an AI call is for. Drives the default objective and the brief's instructions. */
+export const CALL_TYPES = ['sales', 'follow_up', 'reminder_meeting', 'reminder_payment', 'reminder_followup'] as const;
+export type CallType = (typeof CALL_TYPES)[number];
+export function isCallType(v: unknown): v is CallType {
+  return typeof v === 'string' && (CALL_TYPES as readonly string[]).includes(v);
 }
 
 export const DEFAULT_CALL_POLICY: SalesCallPolicy = {
@@ -214,6 +228,7 @@ export const DEFAULT_CALL_POLICY: SalesCallPolicy = {
   fromNumber: null,
   voiceId: null,
   maxCallDurationSec: 420,
+  requireCallApproval: true,
 };
 
 /** Maps a sales_call_policies row onto the shape the gate consumes. */
@@ -244,5 +259,6 @@ export function policyFromRow(row: Record<string, any> | undefined | null): Sale
     fromNumber: row.from_number ?? null,
     voiceId: row.voice_id ?? null,
     maxCallDurationSec: Number(row.max_call_duration_sec ?? DEFAULT_CALL_POLICY.maxCallDurationSec),
+    requireCallApproval: row.require_call_approval ?? DEFAULT_CALL_POLICY.requireCallApproval,
   };
 }

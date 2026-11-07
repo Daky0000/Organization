@@ -69,6 +69,10 @@ export interface AnalystRecord {
   };
   recommended_action: RecommendedAction;
   confidence: number;
+  /** Values the lead stated on the call for the lead's sheet columns. */
+  field_updates: { key: string; value: string | number | boolean }[];
+  /** Something learned about the lead's company, for the company's timeline. */
+  company_note: string | null;
 }
 
 export const ANALYST_SCHEMA = {
@@ -109,6 +113,20 @@ export const ANALYST_SCHEMA = {
     },
     recommended_action: { type: 'string', enum: [...RECOMMENDED_ACTIONS] },
     confidence: { type: 'number', description: '0-1. How well the transcript supports this reading.' },
+    field_updates: {
+      type: 'array',
+      description: 'New values for the LEAD SHEET COLUMNS, only where the lead clearly stated or confirmed the value on this call.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'value'],
+        properties: {
+          key: { type: 'string', description: 'A column key from LEAD SHEET COLUMNS, exactly as listed.' },
+          value: { type: 'string', description: 'The new value, in the column type (dates YYYY-MM-DD, numbers without currency symbols, yes/no).' },
+        },
+      },
+    },
+    company_note: { type: 'string', description: "One or two sentences of new facts about the lead's company (size, plans, who decides). Empty if nothing new." },
   },
 };
 
@@ -123,6 +141,8 @@ Rules that override everything else:
 - Choose the closest objection code from the allowed list and put the lead's actual words in raw_text. Do not invent codes.
 - If the transcript is too short, garbled, or clearly a voicemail or wrong number, say so in the summary, set the matching intent, and give a low confidence.
 - confidence reflects how well the transcript supports your reading, not how good the call was.
+- field_updates: only for columns listed under LEAD SHEET COLUMNS, and only when the LEAD said or confirmed the value ("I paid 200 yesterday", "yes I'll be at the meeting", "my new email is…"). Never fill a column from your own guess, and leave out columns whose value did not change.
+- company_note: only new facts the lead stated about their company. Leave it empty otherwise.
 
 Return only the structured record.`;
 
@@ -139,9 +159,11 @@ export function buildAnalystUserMessage(params: {
   leadContext?: string;
   durationSec?: number | null;
   channel?: string;
+  sheetColumns?: string;
 }): string {
   const parts: string[] = [];
   if (params.leadContext) parts.push(`WHO WE CALLED\n${params.leadContext}`);
+  if (params.sheetColumns) parts.push(`LEAD SHEET COLUMNS (key | label | type | current value)\n${params.sheetColumns}`);
   const meta: string[] = [];
   if (params.channel) meta.push(`channel: ${params.channel}`);
   if (params.durationSec) meta.push(`duration: ${Math.round(params.durationSec / 60)} min`);
@@ -219,6 +241,18 @@ export function parseAnalystOutput(raw: string): AnalystRecord | null {
     },
     recommended_action: isRecommendedAction(obj.recommended_action) ? obj.recommended_action : 'none',
     confidence: Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : 0.5,
+    field_updates: Array.isArray(obj.field_updates)
+      ? obj.field_updates
+          .map((u: any) => {
+            if (!u || typeof u !== 'object' || typeof u.key !== 'string' || !u.key.trim()) return null;
+            const v = u.value;
+            if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') return null;
+            return { key: u.key.trim().slice(0, 60), value: typeof v === 'string' ? v.trim().slice(0, 2000) : v };
+          })
+          .filter(Boolean)
+          .slice(0, 20) as { key: string; value: string | number | boolean }[]
+      : [],
+    company_note: typeof obj.company_note === 'string' && obj.company_note.trim() ? obj.company_note.trim().slice(0, 1000) : null,
   };
 }
 
@@ -237,6 +271,15 @@ export function analystRecordToOps(
   const ops: unknown[] = [];
 
   if (record.summary) ops.push({ op: 'add_note', body: record.summary });
+
+  // Sheet values the lead stated. validateSalesOps checks each key against the
+  // lead's own columns and coerces the value to the column's type.
+  for (const u of record.field_updates) {
+    ops.push({ op: 'update_custom_field', key: u.key, value: u.value });
+  }
+  if (record.company_note && record.intent !== 'wrong_number') {
+    ops.push({ op: 'add_company_note', body: record.company_note });
+  }
 
   for (const o of record.objections) {
     ops.push({ op: 'record_objection', code: o.code, raw_text: o.raw_text });
@@ -312,6 +355,8 @@ export async function runAnalyst(params: {
   leadContext?: string;
   durationSec?: number | null;
   channel?: string;
+  /** The lead's sheet columns, one per line: key | label | type | current value. */
+  sheetColumns?: string;
   currentStage: LeadStage | null;
   now?: Date;
 }): Promise<AnalystOutcome> {
@@ -325,6 +370,7 @@ export async function runAnalyst(params: {
     leadContext: params.leadContext,
     durationSec: params.durationSec,
     channel: params.channel,
+    sheetColumns: params.sheetColumns,
   });
 
   // Free NVIDIA agent ladder first: a rung whose answer does not parse counts

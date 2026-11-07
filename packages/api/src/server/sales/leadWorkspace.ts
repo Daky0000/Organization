@@ -148,32 +148,138 @@ export async function getLeadFields(pool: Pool | PoolClient, userId: string): Pr
 }
 
 /**
- * The custom column keys a list's table should show. Columns are one set per
- * user, so importing a workbook whose sheets have different headers would
- * otherwise give every sheet's list every sheet's columns. A list shows the
- * custom columns at least one of its members has a value in, plus columns no
- * lead has a value in yet (a freshly added column must stay visible so it can
- * be filled in).
+ * The custom column keys linked to a list (sales_lead_list_fields). Columns
+ * are defined once per user; a list's table and its leads' detail panel show
+ * only the columns linked to it, so sheets imported from one workbook keep
+ * their own headers.
  */
-export async function listFieldKeys(pool: Pool, userId: string, listId: string): Promise<string[]> {
+export async function listFieldKeys(pool: Pool | PoolClient, userId: string, listId: string): Promise<string[]> {
   await assertOwnedList(pool, userId, listId);
   const { rows } = await pool.query(
-    `SELECT f.key FROM sales_lead_fields f
-      WHERE f.user_id=$1 AND f.builtin=false
-        AND (
-          EXISTS (
-            SELECT 1 FROM sales_lead_list_members m
-              JOIN sales_lead_profiles p ON p.contact_id=m.contact_id AND p.user_id=$1
-             WHERE m.list_id=$2 AND COALESCE(p.custom_data->>f.key, '') <> ''
-          )
-          OR NOT EXISTS (
-            SELECT 1 FROM sales_lead_profiles p
-             WHERE p.user_id=$1 AND COALESCE(p.custom_data->>f.key, '') <> ''
-          )
-        )`,
+    `SELECT lf.field_key FROM sales_lead_list_fields lf
+       JOIN sales_lead_fields f ON f.user_id=$1 AND f.key=lf.field_key AND f.builtin=false
+      WHERE lf.list_id=$2`,
     [userId, listId],
   );
-  return rows.map((r) => r.key as string);
+  return rows.map((r) => r.field_key as string);
+}
+
+/** Adds column links to a list; keys that are not the user's custom columns are ignored. */
+export async function linkListFields(client: Pool | PoolClient, userId: string, listId: string, keys: string[]) {
+  if (!keys.length) return;
+  await client.query(
+    `INSERT INTO sales_lead_list_fields (list_id, field_key)
+     SELECT $2, f.key FROM sales_lead_fields f
+      WHERE f.user_id=$1 AND f.builtin=false AND f.key = ANY($3::text[])
+     ON CONFLICT DO NOTHING`,
+    [userId, listId, keys],
+  );
+}
+
+/**
+ * Saves the column editor opened on a list. `input` is that list's columns in
+ * display order (built-ins plus the list's custom columns, new ones without a
+ * key). Edits to labels, order and visibility apply to the shared column
+ * definitions; new columns are created and linked to this list; a custom
+ * column left out is only unlinked from this list — its values and its place
+ * in other lists are kept.
+ */
+export async function putListFields(pool: Pool, userId: string, listId: string, input: FieldInput[]) {
+  await assertOwnedList(pool, userId, listId);
+  const before = await getLeadFields(pool, userId);
+  const beforeKeys = new Set(before.map((f) => f.key));
+  const inputKeys = new Set(input.map((f) => f.key).filter((k): k is string => !!k));
+
+  // Give new columns keys up front that no existing column has, so a new
+  // "Notes" here can never collide with (and rename) another list's "Notes".
+  const taken = new Set([...beforeKeys, ...BUILTIN_KEYS]);
+  input = input.map((f) => {
+    if (f.key) return f;
+    const base = slugifyKey(f.label);
+    let key = BUILTIN_KEYS.has(base) ? `${base}_custom` : base;
+    let n = 2;
+    while (taken.has(key)) key = `${base}_${n++}`.slice(0, 40);
+    taken.add(key);
+    return { ...f, key };
+  });
+
+  // Columns this list doesn't use keep their definition; built-ins the editor
+  // left out keep theirs too.
+  const untouched: FieldInput[] = before
+    .filter((f) => !inputKeys.has(f.key))
+    .map((f) => ({ key: f.key, label: f.label, type: f.type, options: f.options, width: f.width, hidden: f.hidden }));
+  const saved = await putLeadFields(pool, userId, [...input, ...untouched]);
+
+  const created = saved.filter((f) => !f.builtin && !beforeKeys.has(f.key)).map((f) => f.key);
+  const keep = [...inputKeys].filter((k) => saved.some((f) => f.key === k && !f.builtin));
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM sales_lead_list_fields WHERE list_id=$1`, [listId]);
+    await linkListFields(client, userId, listId, [...keep, ...created]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+  return { fields: saved, keys: await listFieldKeys(pool, userId, listId) };
+}
+
+/**
+ * Merges `sourceIds` into `targetId`: their leads and columns move to the
+ * target, then the source lists are deleted. Optionally renames the target.
+ */
+export async function mergeLeadLists(pool: Pool, userId: string, targetId: string, sourceIds: string[], name?: string | null) {
+  const sources = [...new Set(sourceIds)].filter((id) => id !== targetId);
+  if (!sources.length) throw new ActivityError(400, 'Choose at least one other list to merge');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await assertOwnedList(client, userId, targetId);
+    const { rows } = await client.query(
+      `SELECT id FROM sales_lead_lists WHERE user_id=$1 AND id = ANY($2::text[])`, [userId, sources],
+    );
+    if (rows.length !== sources.length) throw new ActivityError(404, 'List not found');
+    await client.query(
+      `INSERT INTO sales_lead_list_members (list_id, contact_id)
+       SELECT $1, contact_id FROM sales_lead_list_members WHERE list_id = ANY($2::text[])
+       ON CONFLICT DO NOTHING`,
+      [targetId, sources],
+    );
+    await client.query(
+      `INSERT INTO sales_lead_list_fields (list_id, field_key)
+       SELECT $1, field_key FROM sales_lead_list_fields WHERE list_id = ANY($2::text[])
+       ON CONFLICT DO NOTHING`,
+      [targetId, sources],
+    );
+    await client.query(`DELETE FROM sales_lead_lists WHERE user_id=$1 AND id = ANY($2::text[])`, [userId, sources]);
+    const newName = name?.trim().slice(0, 120);
+    if (newName) {
+      try {
+        await client.query(`UPDATE sales_lead_lists SET name=$3, updated_at=NOW() WHERE id=$1 AND user_id=$2`, [targetId, userId, newName]);
+      } catch (err) {
+        if (uniqueViolation(err)) throw new ActivityError(409, `A list called "${newName}" already exists`);
+        throw err;
+      }
+    } else {
+      await client.query(`UPDATE sales_lead_lists SET updated_at=NOW() WHERE id=$1`, [targetId]);
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+  const { rows } = await pool.query(
+    `SELECT l.id, l.name, l.source_type, l.color, l.archived_at, l.created_at,
+            (SELECT COUNT(*)::int FROM sales_lead_list_members m WHERE m.list_id=l.id) AS lead_count
+       FROM sales_lead_lists l WHERE l.id=$1`,
+    [targetId],
+  );
+  return rows[0];
 }
 
 export interface FieldInput {
@@ -226,6 +332,11 @@ export async function putLeadFields(pool: Pool, userId: string, input: FieldInpu
     for (const key of removed) {
       await client.query(
         `UPDATE sales_lead_profiles SET custom_data = custom_data - $2::text WHERE user_id=$1 AND custom_data ? $2::text`,
+        [userId, key],
+      );
+      await client.query(
+        `DELETE FROM sales_lead_list_fields lf USING sales_lead_lists l
+          WHERE lf.list_id=l.id AND l.user_id=$1 AND lf.field_key=$2`,
         [userId, key],
       );
     }
@@ -417,7 +528,9 @@ export function endOfLocalDay(nowMs: number, tz: string): Date {
 const LEAD_SELECT = `
   c.id AS contact_id, c.first_name, c.last_name, c.email, c.phone, c.created_at,
   p.stage, p.do_not_call, p.timezone, p.last_contacted_at, COALESCE(p.custom_data, '{}'::jsonb) AS custom_data,
-  COALESCE((SELECT json_agg(json_build_object('id', l.id, 'name', l.name, 'color', l.color) ORDER BY l.name)
+  COALESCE((SELECT json_agg(json_build_object('id', l.id, 'name', l.name, 'color', l.color,
+                     'field_keys', COALESCE((SELECT json_agg(lf.field_key) FROM sales_lead_list_fields lf WHERE lf.list_id=l.id), '[]'::json))
+                   ORDER BY l.name)
               FROM sales_lead_list_members m JOIN sales_lead_lists l ON l.id=m.list_id
              WHERE m.contact_id=c.id), '[]'::json) AS lists,
   la.response_status AS last_response_status, la.at AS last_activity_at,
