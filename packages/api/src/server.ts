@@ -51,6 +51,8 @@ import { registerSalesRoutes } from './server/salesRoutes.ts';
 import { registerSalesLeadsRoutes } from './server/salesLeadsRoutes.ts';
 import { registerCompanyContextRoutes } from './server/companyContextRoutes.ts';
 import { seedAdminCompanyContext } from './server/companyContext.ts';
+import { registerOrchestratorRoutes } from './server/orchestratorRoutes.ts';
+import { failStaleRuns } from './server/orchestrator/engine.ts';
 import { processPendingActivityReads } from './server/sales/leadActivities.ts';
 import { runLeadDigests, runLeadReminders } from './server/sales/leadReminders.ts';
 import { buildSalesEngine } from './server/sales/salesEngine.ts';
@@ -521,6 +523,7 @@ async function ensureDatabase() {
   setDbReady(true);
   // Africon company context for admin accounts that never had it (editable afterwards).
   void seedAdminCompanyContext(pool);
+  void failStaleRuns(pool);
 
 }
 
@@ -951,6 +954,7 @@ app.get('/api/autopilot/ops/diagnostics', async (req: Request, res: Response) =>
 // Lead workspace first: its literal paths must win over /leads/:contactId.
 app.use('/api/sales', registerSalesLeadsRoutes({ requireAuth, pool: pool! }));
 app.use('/api/company-context', registerCompanyContextRoutes({ requireAuth, pool: pool! }));
+app.use('/api/agent', registerOrchestratorRoutes({ requireAuth, pool: pool! }));
 app.use('/api/sales', registerSalesRoutes({ requireAuth, pool: pool!, salesEngine }));
 
 // ─── Connector Abstraction Layer ──────────────────────────────────────────────

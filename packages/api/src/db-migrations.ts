@@ -5001,6 +5001,48 @@ async function createSalesLeadWorkspaceTables(pool: Pool): Promise<void> {
       PRIMARY KEY (user_id, seed)
     )`);
 
+  // Who to call for an event: AI / rule suggestions, each a segment of leads.
+  await step('sales_target_suggestions', `
+    CREATE TABLE IF NOT EXISTS sales_target_suggestions (
+      id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      batch_id    TEXT NOT NULL,
+      event_id    TEXT REFERENCES company_context_items(id) ON DELETE SET NULL,
+      event_title TEXT NOT NULL DEFAULT '',
+      title       TEXT NOT NULL,
+      reason      TEXT NOT NULL DEFAULT '',
+      pitch       TEXT NOT NULL DEFAULT '',
+      criteria    JSONB NOT NULL DEFAULT '{}'::jsonb,
+      lead_ids    TEXT[] NOT NULL DEFAULT '{}',
+      evidence    JSONB NOT NULL DEFAULT '{}'::jsonb,
+      warm_count  INT NOT NULL DEFAULT 0,
+      priority    INT NOT NULL DEFAULT 5,
+      source      TEXT NOT NULL DEFAULT 'rules' CHECK (source IN ('ai','rules')),
+      summary     TEXT,
+      status      TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','list_created','dismissed')),
+      list_id     TEXT REFERENCES sales_lead_lists(id) ON DELETE SET NULL,
+      run_id      TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  await step('sales_target_suggestions_idx', `CREATE INDEX IF NOT EXISTS sales_target_suggestions_idx ON sales_target_suggestions (user_id, event_id, created_at DESC)`);
+
+  // The orchestrator: one run per request — plan, steps (parallel waves), answer, proposed actions.
+  await step('orchestrator_runs', `
+    CREATE TABLE IF NOT EXISTS orchestrator_runs (
+      id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      parent_run_id TEXT,
+      message       TEXT NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'planning' CHECK (status IN ('planning','running','synthesizing','done','failed')),
+      plan          JSONB,
+      steps         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      result        JSONB,
+      error         TEXT,
+      created_at    TIMESTAMPTZ DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  await step('orchestrator_runs_user_idx', `CREATE INDEX IF NOT EXISTS orchestrator_runs_user_idx ON orchestrator_runs (user_id, created_at DESC)`);
+
   // One digest per user per local day; the row is the claim.
   await step('sales_digest_log', `
     CREATE TABLE IF NOT EXISTS sales_digest_log (

@@ -1,5 +1,5 @@
 // Generated from the migration source. Regenerate before build or development.
-export const SCHEMA_SOURCE_HASH = '217f616a314cd1188ab4a1bf940fc580a9bd145832391ac4bc05ae08beb0ba8f';
+export const SCHEMA_SOURCE_HASH = '644fd3f2897bd0a1230401713ef87faaa831239d4ba4e9a845883254e756a89e';
 export const REQUIRED_SCHEMA_TABLES = [
   "account_metrics",
   "admin_agent_runs",
@@ -136,6 +136,7 @@ export const REQUIRED_SCHEMA_TABLES = [
   "notifications",
   "oauth_states",
   "openai_generations",
+  "orchestrator_runs",
   "organization_audit_logs",
   "organization_invitations",
   "organization_memberships",
@@ -169,6 +170,7 @@ export const REQUIRED_SCHEMA_TABLES = [
   "sales_lead_lists",
   "sales_lead_profiles",
   "sales_playbooks",
+  "sales_target_suggestions",
   "schema_migrations",
   "sms_logs",
   "social_accounts",
