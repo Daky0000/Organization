@@ -13,6 +13,7 @@ import type { Request } from '../types/http.ts';
 import type { Pool } from 'pg';
 import { logger } from '../logger.ts';
 import { buildSalesEngine, type SalesEngine } from './sales/salesEngine.ts';
+import { toE164 } from './sales/orgAgent.ts';
 import { scoreCallWindows } from './sales/callTiming.ts';
 import { runInsightAgent } from './sales/insightAgent.ts';
 import {
@@ -686,14 +687,16 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
     if (!auth) return;
     try {
       const { to_number, context, first_message, voice_id } = req.body ?? {};
-      if (!to_number || !/^\+?[0-9\s\-()]{7,20}$/.test(String(to_number))) {
-        return fail(res, 400, 'A valid phone number in E.164 format is required (e.g. +233201234567)');
+      // Local Ghana numbers (0545950611) are accepted and converted to +233….
+      const toNumber = toE164(to_number ? String(to_number) : null);
+      if (!toNumber) {
+        return fail(res, 400, 'Enter a valid phone number, e.g. 0545950611 or +233545950611');
       }
       if (!context || !String(context).trim()) return fail(res, 400, 'A context for the agent is required');
 
       const result = await salesEngine.placeTestCall({
         userId: auth.userId,
-        toNumber: String(to_number).replace(/[\s\-()]/g, ''),
+        toNumber,
         context: String(context).slice(0, 20_000),
         firstMessage: first_message ?? null,
         voiceId: voice_id ?? null,

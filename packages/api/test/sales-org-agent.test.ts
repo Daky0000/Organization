@@ -82,3 +82,19 @@ test('the assistant posts reports to our webhook with the shared secret', () => 
   assert.equal(a.server.url, 'https://example.com/webhooks/vapi');
   assert.equal(a.server.headers['x-vapi-secret'], 'sekret');
 });
+
+test('local Ghana numbers become E.164', async () => {
+  const { toE164 } = await import('../src/server/sales/orgAgent.ts');
+  assert.equal(toE164('0545950611'), '+233545950611');
+  assert.equal(toE164('054 595 0611'), '+233545950611');
+  assert.equal(toE164('+233545950611'), '+233545950611');
+  assert.equal(toE164('233545950611'), '+233545950611');
+  assert.equal(toE164('00447911123456'), '+447911123456');
+  assert.equal(toE164('12'), null);
+});
+
+test('an OpenAI model Vapi does not accept falls back to the default', () => {
+  assert.equal(resolveOrgAgent({ modelProvider: 'openai', model: 'gpt-4.1-mini ' }).model, 'gpt-4.1-mini');
+  assert.equal(resolveOrgAgent({ modelProvider: 'openai', model: 'claude-sonnet-4-5' }).model, AFRICON_DEFAULT_AGENT.model);
+  assert.equal(resolveOrgAgent({ modelProvider: 'openai', model: 'gpt-5-mini' }).model, 'gpt-5-mini');
+});

@@ -164,6 +164,29 @@ export const AFRICON_DEFAULT_AGENT: OrgAgentConfig = {
   silenceTimeoutSec: 30,
 };
 
+/** OpenAI models Vapi accepts (from Vapi's own validation error, 2026-11-08). */
+export const VAPI_OPENAI_MODELS = new Set([
+  'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'chat-latest', 'gpt-5.4', 'gpt-5.4-mini',
+  'gpt-5.4-nano', 'gpt-5.2', 'gpt-5.2-chat-latest', 'gpt-5.1', 'gpt-5.1-chat-latest', 'gpt-5', 'gpt-5-chat-latest',
+  'gpt-5-mini', 'gpt-5-nano', 'gpt-4.1-2025-04-14', 'gpt-4.1-mini-2025-04-14', 'gpt-4.1-nano-2025-04-14', 'gpt-4.1',
+  'gpt-4.1-mini', 'gpt-4.1-nano', 'chatgpt-4o-latest', 'o3', 'o3-mini', 'o4-mini', 'gpt-4o-mini', 'gpt-4o',
+  'gpt-4o-2024-11-20', 'gpt-4o-2024-08-06', 'gpt-4o-mini-2024-07-18', 'gpt-4-turbo', 'gpt-4',
+]);
+
+/**
+ * Normalise a phone number to E.164, which Vapi requires. Local numbers
+ * ("0545950611") get the default country code — Ghana, where Africon calls.
+ * Returns null when the result cannot be a valid number.
+ */
+export function toE164(raw: string | null | undefined, defaultCountryCode = '233'): string | null {
+  let n = String(raw ?? '').replace(/[\s\-().]/g, '');
+  if (!n) return null;
+  if (n.startsWith('00')) n = `+${n.slice(2)}`;
+  else if (n.startsWith('0')) n = `+${defaultCountryCode}${n.slice(1)}`;
+  else if (!n.startsWith('+')) n = n.startsWith(defaultCountryCode) ? `+${n}` : `+${defaultCountryCode}${n}`;
+  return /^\+[1-9]\d{7,14}$/.test(n) ? n : null;
+}
+
 const STRING_FIELDS = [
   'businessName', 'agentName', 'disclosureText', 'greetingText', 'firstMessage', 'firstMessageNoName',
   'persona', 'knowledge', 'objectionHandling', 'defaultObjective', 'extraRules', 'endCallMessage',
@@ -187,8 +210,11 @@ export function resolveOrgAgent(stored: Record<string, unknown> | null | undefin
     if (v.trim() || blankAllowed) (out as any)[key] = v.slice(0, LIMITS[key] ?? 2_000);
   }
   if (s.provider === 'vapi' || s.provider === 'simulator') out.provider = s.provider;
-  // Earlier defaults Vapi rejects: a saved copy of them means "use the default".
-  if (out.model === 'claude-haiku-4-5') {
+  out.model = out.model.trim();
+  out.modelProvider = out.modelProvider.trim().toLowerCase();
+  // Earlier defaults Vapi rejects, or an OpenAI model Vapi does not accept:
+  // fall back to the default rather than fail every call.
+  if (out.model === 'claude-haiku-4-5' || (out.modelProvider === 'openai' && !VAPI_OPENAI_MODELS.has(out.model))) {
     out.modelProvider = AFRICON_DEFAULT_AGENT.modelProvider;
     out.model = AFRICON_DEFAULT_AGENT.model;
   }

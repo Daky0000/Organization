@@ -19,6 +19,7 @@ import axios from 'axios';
 import { logger } from '../../../logger.ts';
 import type { AttemptOutcome } from '../types.ts';
 import type { CallEvent, CallProvider, PlaceCallRequest, ProviderConfig } from './index.ts';
+import { toE164 } from '../orgAgent.ts';
 
 const VAPI_API = 'https://api.vapi.ai';
 
@@ -255,7 +256,7 @@ export class VapiProvider implements CallProvider {
         `${VAPI_API}/call`,
         {
           phoneNumberId: this.cfg.phoneNumberId,
-          customer: { number: params.toNumber },
+          customer: { number: toE164(params.toNumber) ?? params.toNumber },
           assistant: params.assistant,
           metadata: params.metadata,
         },
@@ -270,13 +271,18 @@ export class VapiProvider implements CallProvider {
     } catch (err: any) {
       const detail = err?.response?.data?.message || err?.response?.data?.error || err?.message;
       const status = err?.response?.status;
-      logger.error({ status, detail }, 'vapi_place_call_failed');
+      const sentModel = (params.assistant as any)?.model;
+      logger.error({ status, detail, model: sentModel?.model, modelProvider: sentModel?.provider }, 'vapi_place_call_failed');
       // A private key used here is the usual cause of a 401 — the public key
       // cannot place calls, which is the single most common setup mistake.
       if (status === 401 || status === 403) {
         throw new Error('Vapi rejected the key. Placing calls requires the PRIVATE key, not the public one.');
       }
-      if (status === 400) throw new Error(`Vapi rejected the call: ${detail}`);
+      if (status === 400) {
+        const msg = Array.isArray(detail) ? detail.join('; ') : String(detail);
+        const hint = /model/.test(msg) ? ` (sent model: ${sentModel?.provider}/${sentModel?.model})` : '';
+        throw new Error(`Vapi rejected the call: ${msg.slice(0, 400)}${hint}`);
+      }
       throw new Error(`Vapi call failed: ${detail || 'unknown error'}`);
     }
   }
