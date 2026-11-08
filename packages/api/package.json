@@ -36,6 +36,7 @@
     "ioredis": "^5.7.0",
     "jpeg-js": "^0.4.4",
     "jsonwebtoken": "^9.0.3",
+    "libphonenumber-js": "1.12.10",
     "nodemailer": "^10.0.15",
     "pdfkit": "^0.15.2",
     "pg": "^8.20.0",

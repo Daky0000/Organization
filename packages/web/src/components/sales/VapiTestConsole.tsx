@@ -111,7 +111,12 @@ export default function VapiTestConsole({ leads = [] }: { leads?: SalesLead[] })
 
       // Loaded on demand so the SDK stays out of the main bundle — most
       // sessions never open this panel.
-      const { default: Vapi } = await import('@vapi-ai/web');
+      // The SDK is CommonJS (exports.default = Vapi). Depending on the bundler's
+      // interop the class arrives as mod.default or mod.default.default — a
+      // production build got the wrapper, hence "r is not a constructor".
+      const mod: any = await import('@vapi-ai/web');
+      const Vapi = [mod?.default?.default, mod?.default, mod].find((c) => typeof c === 'function');
+      if (!Vapi) throw new Error('Could not load the Vapi browser SDK');
       const vapi = new Vapi(publicKey) as unknown as VapiClient;
       vapiRef.current = vapi;
 

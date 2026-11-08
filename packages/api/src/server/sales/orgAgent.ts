@@ -13,6 +13,8 @@
 // page is where they get updated.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
+
 export const SALES_AGENT_PLATFORM = 'sales_agent';
 
 /** One playbook entry: when the lead raises this, answer like this. */
@@ -178,13 +180,19 @@ export const VAPI_OPENAI_MODELS = new Set([
  * ("0545950611") get the default country code — Ghana, where Africon calls.
  * Returns null when the result cannot be a valid number.
  */
-export function toE164(raw: string | null | undefined, defaultCountryCode = '233'): string | null {
-  let n = String(raw ?? '').replace(/[\s\-().]/g, '');
+export function toE164(raw: string | null | undefined, defaultCountry: CountryCode = 'GH'): string | null {
+  let n = String(raw ?? '').trim().replace(/[\s\-().]/g, '');
   if (!n) return null;
   if (n.startsWith('00')) n = `+${n.slice(2)}`;
-  else if (n.startsWith('0')) n = `+${defaultCountryCode}${n.slice(1)}`;
-  else if (!n.startsWith('+')) n = n.startsWith(defaultCountryCode) ? `+${n}` : `+${defaultCountryCode}${n}`;
-  return /^\+[1-9]\d{7,14}$/.test(n) ? n : null;
+  const valid = (s: string, country?: CountryCode) => {
+    const p = parsePhoneNumberFromString(s, country);
+    return p && p.isValid() ? p.number : null;
+  };
+  if (n.startsWith('+')) return valid(n);
+  // No "+": first read it as a local number in the default country
+  // (0545950611 → +233545950611), then as an international number written
+  // without the "+" (14155550100 → +14155550100, 233545950611 → +233…).
+  return valid(n, defaultCountry) ?? valid(`+${n}`);
 }
 
 const STRING_FIELDS = [

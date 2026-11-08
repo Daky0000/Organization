@@ -98,3 +98,10 @@ test('an OpenAI model Vapi does not accept falls back to the default', () => {
   assert.equal(resolveOrgAgent({ modelProvider: 'openai', model: 'claude-sonnet-4-5' }).model, AFRICON_DEFAULT_AGENT.model);
   assert.equal(resolveOrgAgent({ modelProvider: 'openai', model: 'gpt-5-mini' }).model, 'gpt-5-mini');
 });
+
+test('international numbers written without + are not given +233', async () => {
+  const { toE164 } = await import('../src/server/sales/orgAgent.ts');
+  assert.equal(toE164('14155550123'), '+14155550123');
+  assert.equal(toE164('+1 (415) 555-0123'), '+14155550123');
+  assert.equal(toE164('545950611'), '+233545950611');
+});
