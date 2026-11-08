@@ -156,6 +156,16 @@ export default function AdminSalesAgent() {
     } catch (e: any) { setMsg({ ok: false, text: e.message }); } finally { setSaving(false); }
   }
 
+  async function rotateSecret() {
+    if (!window.confirm('Make a new webhook secret? The Vapi assistant is updated with it straight away.')) return;
+    setSaving(true); setMsg(null);
+    try {
+      const d = await (await fetch(`${base}/rotate-secret`, { method: 'POST', headers })).json();
+      if (d.success) { apply(d); setMsg({ ok: !d.sync?.error, text: `New webhook secret made.${syncText(d)}` }); }
+      else setMsg({ ok: false, text: d.error ?? 'Could not rotate the secret' });
+    } catch (e: any) { setMsg({ ok: false, text: e.message }); } finally { setSaving(false); }
+  }
+
   if (!view || !draft) {
     return (
       <div className="flex flex-col items-center gap-2 py-12">
@@ -209,6 +219,12 @@ export default function AdminSalesAgent() {
           <StatusLine ok={view.vapi.hasWebhookSecret} label={view.vapi.hasWebhookSecret ? 'Webhook secret' : 'Webhook secret — created automatically when you save'} />
           {vapi && <StatusLine ok={vapi.ok} label={vapi.ok ? 'Vapi accepted the key' : (vapi.error ?? 'Vapi check failed')} />}
           <StatusLine ok={Boolean(view.vapi.inboundAssistantId)} label={view.vapi.inboundAssistantId ? 'Answers incoming calls' : 'Not answering incoming calls yet — save to sync'} />
+          {view.vapi.hasWebhookSecret && (
+            <button type="button" disabled={saving} onClick={() => void rotateSecret()}
+              className="text-xs font-semibold text-[#2563EB] underline-offset-2 hover:underline disabled:opacity-40">
+              Rotate webhook secret
+            </button>
+          )}
         </div>
         <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
           <Field label="Calls are placed from" hint={vapi?.ok && !vapi.phoneNumbers.length ? 'This Vapi account has no phone numbers yet — buy or import one at dashboard.vapi.ai.' : 'The Vapi phone number outbound calls dial from.'}>

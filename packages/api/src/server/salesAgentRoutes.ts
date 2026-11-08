@@ -171,6 +171,23 @@ export function registerSalesAgentRoutes({ requireAdmin, hasDatabase, pool, sale
     }
   });
 
+  // Replace the webhook secret (e.g. after it may have been exposed) and push
+  // the new one to the Vapi assistant straight away.
+  router.post('/admin/sales-agent/rotate-secret', async (req: Request, res: Response) => {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    if (!hasDatabase() || !pool) return res.status(503).json({ success: false, error: 'Database unavailable' });
+    try {
+      const vapi = await readRow('vapi');
+      await writeRow('vapi', { ...vapi, webhookSecret: randomBytes(24).toString('hex') });
+      void recordAuditLog((admin as any).id, 'admin_vapi_webhook_secret_rotated', [], {});
+      return res.json(await view(await syncInbound()));
+    } catch (err: any) {
+      logger.error({ err }, 'sales_agent_rotate_secret_failed');
+      return res.status(500).json({ success: false, error: 'Could not rotate the secret' });
+    }
+  });
+
   router.post('/admin/sales-agent/sync-vapi', async (req: Request, res: Response) => {
     const admin = await requireAdmin(req, res);
     if (!admin) return;

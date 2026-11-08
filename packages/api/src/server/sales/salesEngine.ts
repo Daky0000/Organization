@@ -1002,7 +1002,10 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     firstMessage?: string | null;
     voiceId?: string | null;
   }): Promise<{ publicKey: string; assistant: Record<string, unknown> }> {
-    const { provider, assistant } = await buildTestAssistant(params);
+    const { provider, assistant: full } = await buildTestAssistant(params);
+    // This goes to a browser: never the webhook URL's shared secret. A
+    // browser test has no attempt row to report back to anyway.
+    const { server: _server, ...assistant } = full as Record<string, unknown> & { server?: unknown };
     const publicKey = provider.getPublicKey();
     if (!publicKey) {
       throw new Error('No Vapi public key configured. Add it under Admin → Integrations → Vapi to test in the browser.');

@@ -37,6 +37,31 @@ Do not:
 type TranscriptLine = { role: 'user' | 'assistant'; text: string };
 type WebState = 'idle' | 'connecting' | 'live' | 'ended';
 
+/**
+ * Vapi's web SDK reports errors in several shapes — { errorMsg }, { error:
+ * { message } }, a fetch Response-like { error: { error: { message: [...] } } },
+ * a Daily.co error — so dig for the first human-readable text instead of
+ * replacing it with a generic message.
+ */
+function vapiErrorText(e: any): string {
+  const seen = new Set<unknown>();
+  const dig = (v: any, depth: number): string | null => {
+    if (v == null || depth > 5 || seen.has(v)) return null;
+    if (typeof v === 'string') return v.trim() || null;
+    if (Array.isArray(v)) return v.map((x) => dig(x, depth + 1)).filter(Boolean).join('; ') || null;
+    if (typeof v !== 'object') return String(v);
+    seen.add(v);
+    for (const k of ['errorMsg', 'message', 'msg', 'error', 'details', 'reason', 'type']) {
+      const found = dig(v[k], depth + 1);
+      if (found && found !== '[object Object]') return found;
+    }
+    return null;
+  };
+  const text = dig(e, 0);
+  if (text) return text.slice(0, 400);
+  try { return JSON.stringify(e).slice(0, 400); } catch { return 'unknown error (see the browser console)'; }
+}
+
 const regionNames = (() => {
   try { return new Intl.DisplayNames(['en'], { type: 'region' }); } catch { return null; }
 })();
@@ -140,7 +165,9 @@ export default function VapiTestConsole({ leads = [] }: { leads?: SalesLead[] })
       vapi.on('call-start', () => setWebState('live'));
       vapi.on('call-end', () => { setWebState('ended'); vapiRef.current = null; });
       vapi.on('error', (e: any) => {
-        setError(e?.errorMsg || e?.message || 'The browser call failed');
+        // eslint-disable-next-line no-console -- the raw object is the only full record of what Vapi said
+        console.error('Vapi browser call error', e);
+        setError(`The browser call failed: ${vapiErrorText(e)}`);
         setWebState('idle');
         vapiRef.current = null;
       });
