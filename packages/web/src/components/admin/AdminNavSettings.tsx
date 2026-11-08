@@ -5,26 +5,37 @@ const tok = () => localStorage.getItem('auth_token') ?? '';
 const jsonHeaders = () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${tok()}` });
 const authHeaders = () => ({ Authorization: `Bearer ${tok()}` });
 
+interface NavChild {
+  key: string;
+  label: string;
+  /** Set on entries nested one level deeper, under the sibling with this key. */
+  under?: string;
+}
+
 interface NavItem {
   key: string;
   label: string;
-  children?: { key: string; label: string }[];
+  children?: NavChild[];
 }
 
 const NAV_TREE: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'notifications', label: 'Notifications' },
   { key: 'social-inbox', label: 'Social Inbox' },
+  { key: 'projects', label: 'Projects' },
   { key: 'crm-companies', label: 'Companies' },
   {
     key: 'sales', label: 'Sales',
+    // Mirrors the sidebar: Leads and AI Calling are groups. Switching a group
+    // off hides it together with the entries nested under it.
     children: [
       { key: 'sales-overview', label: 'Overview' },
       { key: 'sales-leads', label: 'Leads' },
+      { key: 'sales-followups', label: 'Leads › Follow-ups', under: 'sales-leads' },
       { key: 'sales-ai-calling', label: 'AI Calling' },
-      { key: 'sales-conversations', label: 'Conversations' },
-      { key: 'sales-followups', label: 'Follow-ups' },
-      { key: 'sales-intelligence', label: 'Intelligence' },
+      { key: 'sales-conversations', label: 'AI Calling › Conversations', under: 'sales-ai-calling' },
+      { key: 'sales-intelligence', label: 'AI Calling › Intelligence', under: 'sales-ai-calling' },
+      { key: 'sales-events', label: 'AI Calling › Events', under: 'sales-ai-calling' },
       { key: 'sales-settings', label: 'Settings' },
     ],
   },
@@ -35,12 +46,12 @@ const NAV_TREE: NavItem[] = [
       // Content is a nested group inside Marketing — toggling `content` hides
       // the whole sub-tree, the `content-*` keys hide individual entries.
       { key: 'content', label: 'Content' },
-      { key: 'content-posts', label: 'Content › Posts' },
-      { key: 'content-automation', label: 'Content › Automation' },
-      { key: 'content-media', label: 'Content › Media' },
-      { key: 'content-studio', label: 'Content › AI Studio' },
-      { key: 'content-workflow', label: 'Content › Workflow' },
-      { key: 'analytics', label: 'Content › Analytics' },
+      { key: 'content-posts', label: 'Content › Posts', under: 'content' },
+      { key: 'content-automation', label: 'Content › Automation', under: 'content' },
+      { key: 'content-media', label: 'Content › Media', under: 'content' },
+      { key: 'content-studio', label: 'Content › AI Studio', under: 'content' },
+      { key: 'content-workflow', label: 'Content › Workflow', under: 'content' },
+      { key: 'analytics', label: 'Content › Analytics', under: 'content' },
     ],
   },
   { key: 'integrations', label: 'Integrations' },
@@ -101,8 +112,9 @@ export default function AdminNavSettings() {
       <div className="mb-6">
         <h2 className="text-lg font-semibold text-gray-900">Navigation Visibility</h2>
         <p className="text-sm text-gray-500 mt-1">
-          Toggle nav items off to hide them from all users. Admins always see every item.
-          Disabling a parent hides the entire section including sub-items.
+          Toggle nav items off to hide them in the app for everyone, admins included.
+          The Admin console always stays reachable. Disabling a parent hides the entire
+          section including sub-items.
         </p>
       </div>
 
@@ -137,13 +149,14 @@ export default function AdminNavSettings() {
                 <div className="bg-gray-50/50 border-t border-gray-100">
                   {item.children.map(child => {
                     const childDisabled = disabled.has(child.key);
+                    const nested = item.children!.filter(c => c.under === child.key);
                     return (
-                      <div key={child.key} className={`flex items-center justify-between pl-10 pr-5 py-3 border-b border-gray-100 last:border-0 ${childDisabled ? 'opacity-60' : ''}`}>
+                      <div key={child.key} className={`flex items-center justify-between ${child.under ? 'pl-16' : 'pl-10'} pr-5 py-3 border-b border-gray-100 last:border-0 ${childDisabled ? 'opacity-60' : ''}`}>
                         <p className={`text-sm ${childDisabled ? 'text-gray-400 line-through' : 'text-gray-600'}`}>
                           {child.label}
                         </p>
                         <button
-                          onClick={() => toggle(child.key)}
+                          onClick={() => toggle(child.key, nested.length ? nested : undefined)}
                           className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${childDisabled ? 'bg-gray-200' : 'bg-[#2563EB]'}`}
                           role="switch"
                           aria-checked={!childDisabled}

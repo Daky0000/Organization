@@ -1,16 +1,22 @@
 import { BarChart2, Calendar, Image, Inbox, Sparkles, Workflow } from 'lucide-react';
 import type { PageType } from '../App';
 
-const LINKS: { label: string; desc: string; page: PageType; icon: React.ReactNode }[] = [
-  { label: 'Posts & Calendar', desc: 'Plan, schedule and publish social posts', page: 'posts', icon: <Calendar size={18} /> },
-  { label: 'AI Studio', desc: 'Generate images, video and branded cards', page: 'cards', icon: <Sparkles size={18} /> },
-  { label: 'Media Library', desc: 'All your uploaded and generated assets', page: 'media', icon: <Image size={18} /> },
-  { label: 'Workflow', desc: 'Automate content from idea to publish', page: 'workflow', icon: <Workflow size={18} /> },
-  { label: 'Analytics', desc: 'Reach and engagement across platforms', page: 'analytics', icon: <BarChart2 size={18} /> },
-  { label: 'Social Inbox', desc: 'Replies, comments and client approvals', page: 'social-inbox', icon: <Inbox size={18} /> },
+// navKey / groupKey match the keys in Admin > Navigation, so a card disappears
+// when its sidebar entry (or the Content group it sits in) is switched off.
+const LINKS: { label: string; desc: string; page: PageType; icon: React.ReactNode; navKey: string; groupKey?: string }[] = [
+  { label: 'Posts & Calendar', desc: 'Plan, schedule and publish social posts', page: 'posts', icon: <Calendar size={18} />, navKey: 'content-posts', groupKey: 'content' },
+  { label: 'AI Studio', desc: 'Generate images, video and branded cards', page: 'cards', icon: <Sparkles size={18} />, navKey: 'content-studio', groupKey: 'content' },
+  { label: 'Media Library', desc: 'All your uploaded and generated assets', page: 'media', icon: <Image size={18} />, navKey: 'content-media', groupKey: 'content' },
+  { label: 'Workflow', desc: 'Automate content from idea to publish', page: 'workflow', icon: <Workflow size={18} />, navKey: 'content-workflow', groupKey: 'content' },
+  { label: 'Analytics', desc: 'Reach and engagement across platforms', page: 'analytics', icon: <BarChart2 size={18} />, navKey: 'analytics', groupKey: 'content' },
+  { label: 'Social Inbox', desc: 'Replies, comments and client approvals', page: 'social-inbox', icon: <Inbox size={18} />, navKey: 'social-inbox' },
 ];
 
-export default function MarketingOverview({ navigateToPage }: { navigateToPage: (page: PageType) => void }) {
+export default function MarketingOverview({ navigateToPage, disabledNav }: {
+  navigateToPage: (page: PageType) => void;
+  disabledNav?: Set<string>;
+}) {
+  const links = LINKS.filter((l) => !disabledNav?.has(l.navKey) && !(l.groupKey && disabledNav?.has(l.groupKey)));
   return (
     <div className="space-y-8 pb-8">
       <div>
@@ -19,7 +25,7 @@ export default function MarketingOverview({ navigateToPage }: { navigateToPage: 
       </div>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {LINKS.map(item => (
+        {links.map(item => (
           <button
             key={item.page}
             onClick={() => navigateToPage(item.page)}

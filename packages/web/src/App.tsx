@@ -59,6 +59,7 @@ const VerifyEmail = lazy(() => import('./pages/VerifyEmail'));
 const PostAutomation = lazy(() => import('./pages/PostAutomation'));
 const MarketingOverview = lazy(() => import('./pages/MarketingOverview'));
 const SalesLeads = lazy(() => import('./pages/SalesLeads'));
+const SalesEvents = lazy(() => import('./pages/SalesEvents'));
 const SalesLeadWorkspace = lazy(() => import('./pages/SalesLeadWorkspace'));
 const SalesOverview = lazy(() => import('./pages/SalesOverview'));
 const SalesConversations = lazy(() => import('./pages/SalesConversations'));
@@ -112,6 +113,7 @@ export type PageType =
   | 'sales-overview'
   | 'sales-leads'
   | 'sales-ai-calling'
+  | 'sales-events'
   | 'sales-conversations'
   | 'sales-followups'
   | 'sales-intelligence'
@@ -156,6 +158,7 @@ const PAGE_PATHS: Record<PageType, string> = {
   'sales-overview': '/sales/overview',
   'sales-leads': '/sales/leads',
   'sales-ai-calling': '/sales/ai-calling',
+  'sales-events': '/sales/events',
   'sales-conversations': '/sales/conversations',
   'sales-followups': '/sales/followups',
   'sales-intelligence': '/sales/intelligence',
@@ -187,6 +190,7 @@ const PAGE_TITLES: Record<PageType, string> = {
   'sales-overview': 'Sales Overview',
   'sales-leads': 'Leads',
   'sales-ai-calling': 'AI Calling',
+  'sales-events': 'Events',
   'sales-conversations': 'Sales Conversations',
   'sales-followups': 'Follow-ups',
   'sales-intelligence': 'Sales Intelligence',
@@ -213,7 +217,27 @@ const MARKETING_PAGES: PageType[] = [
   ...CONTENT_PAGES,
 ];
 const SALES_PAGES: PageType[] = [
-  'sales-overview', 'sales-leads', 'sales-ai-calling', 'sales-conversations', 'sales-followups', 'sales-intelligence', 'sales-settings',
+  'sales-overview', 'sales-leads', 'sales-ai-calling', 'sales-events', 'sales-conversations', 'sales-followups', 'sales-intelligence', 'sales-settings',
+];
+
+// Sales sidebar: four top entries, with the rest nested under the page they
+// belong to. navKey matches the keys in Admin > Navigation.
+type SalesNavEntry = { id: PageType; label: string; navKey: string; children?: SalesNavEntry[] };
+const SALES_NAV: SalesNavEntry[] = [
+  { id: 'sales-overview', label: 'Overview', navKey: 'sales-overview' },
+  {
+    id: 'sales-leads', label: 'Leads', navKey: 'sales-leads',
+    children: [{ id: 'sales-followups', label: 'Follow-ups', navKey: 'sales-followups' }],
+  },
+  {
+    id: 'sales-ai-calling', label: 'AI Calling', navKey: 'sales-ai-calling',
+    children: [
+      { id: 'sales-conversations', label: 'Conversations', navKey: 'sales-conversations' },
+      { id: 'sales-intelligence', label: 'Intelligence', navKey: 'sales-intelligence' },
+      { id: 'sales-events', label: 'Events', navKey: 'sales-events' },
+    ],
+  },
+  { id: 'sales-settings', label: 'Settings', navKey: 'sales-settings' },
 ];
 
 async function fetchCurrentUser(token: string): Promise<AppUser | null> {
@@ -290,8 +314,13 @@ function AppSidebar({
   disabledNav,
   onStartSystemTour,
 }: AppSidebarProps) {
-  const navOn = (key: string) => authUser?.role === 'admin' || !disabledNav.has(key);
+  // Admin > Navigation hides items for everyone, admins included. The Admin
+  // link below is gated on role alone, so an admin can always switch them back.
+  const navOn = (key: string) => !disabledNav.has(key);
   const { currentOrg, currentProject, projects, refresh } = useWorkspace();
+  // Sales groups (Leads, AI Calling) open on their own while one of their
+  // pages is showing; a click on the chevron overrides that.
+  const [salesGroupOpen, setSalesGroupOpen] = useState<Record<string, boolean>>({});
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [navSearch, setNavSearch] = useState('');
@@ -455,6 +484,7 @@ function AppSidebar({
         </section>
 
         {/* ── Projects Section ── */}
+        {navOn('projects') && (
         <section className="os-nav-section">
           <div className="flex items-center justify-between px-2.5 pb-1">
             <span className="text-[10.5px] font-medium uppercase tracking-[.14em] text-faint">Projects</span>
@@ -606,6 +636,7 @@ function AppSidebar({
             );
           })}
         </section>
+        )}
 
         {/* ── Pipeline & Operations Section ── */}
         <section className="os-nav-section">
@@ -649,23 +680,55 @@ function AppSidebar({
               </div>
               {(salesMenuOpen || Boolean(q)) && (
                 <div className="ml-4 border-l border-line pl-2.5 py-0.5 flex flex-col">
-                  {(
-                    [
-                      { id: 'sales-overview' as PageType, label: 'Overview', navKey: 'sales-overview' },
-                      { id: 'sales-leads' as PageType, label: 'Leads', navKey: 'sales-leads' },
-                      { id: 'sales-ai-calling' as PageType, label: 'AI Calling', navKey: 'sales-ai-calling' },
-                      { id: 'sales-conversations' as PageType, label: 'Conversations', navKey: 'sales-conversations' },
-                      { id: 'sales-followups' as PageType, label: 'Follow-ups', navKey: 'sales-followups' },
-                      { id: 'sales-intelligence' as PageType, label: 'Intelligence', navKey: 'sales-intelligence' },
-                      { id: 'sales-settings' as PageType, label: 'Settings', navKey: 'sales-settings' },
-                    ] as { id: PageType; label: string; navKey: string }[]
-                  )
-                    .filter((c) => navOn(c.navKey) && matches(`Sales ${c.label}`))
-                    .map((c) => (
-                      <button key={c.id} type="button" onClick={() => go(c.id)} className={subCls(currentPage === c.id)}>
-                        {c.label}
-                      </button>
-                    ))}
+                  {SALES_NAV.filter((g) => navOn(g.navKey)).map((g) => {
+                    const kids = (g.children ?? []).filter((c) => navOn(c.navKey) && matches(`Sales ${g.label} ${c.label}`));
+                    if (!matches(`Sales ${g.label}`) && kids.length === 0) return null;
+                    if (!g.children) {
+                      return (
+                        <button key={g.id} type="button" onClick={() => go(g.id)} className={subCls(currentPage === g.id)}>
+                          {g.label}
+                        </button>
+                      );
+                    }
+                    const inGroup = currentPage === g.id || g.children.some((c) => c.id === currentPage);
+                    const open = Boolean(q) || (salesGroupOpen[g.id] ?? inGroup);
+                    return (
+                      <div key={g.id} className="flex flex-col">
+                        <div className={subCls(currentPage === g.id)}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSalesGroupOpen((s) => ({ ...s, [g.id]: true }));
+                              go(g.id);
+                            }}
+                            className="flex min-w-0 flex-1 items-center self-stretch text-left"
+                          >
+                            {g.label}
+                          </button>
+                          {kids.length > 0 && (
+                            <button
+                              type="button"
+                              aria-label={`Toggle ${g.label} submenu`}
+                              aria-expanded={open}
+                              onClick={() => setSalesGroupOpen((s) => ({ ...s, [g.id]: !open }))}
+                              className="shrink-0 -m-1 p-1 rounded-[8px] hover:bg-sunken"
+                            >
+                              <ChevronDown size={11} className={`text-faint transition-transform ${open ? 'rotate-180' : ''}`} />
+                            </button>
+                          )}
+                        </div>
+                        {open && kids.length > 0 && (
+                          <div className="ml-2.5 border-l border-line pl-2.5 flex flex-col">
+                            {kids.map((c) => (
+                              <button key={c.id} type="button" onClick={() => go(c.id)} className={subCls(currentPage === c.id)}>
+                                {c.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </>
@@ -786,10 +849,12 @@ function AppSidebar({
       </nav>
 
       {/* ── Notifications Row ── */}
-      <div className="mx-3 border-t border-line py-2 px-1 flex items-center justify-between">
-        <span className="text-[10.5px] font-medium uppercase tracking-[.14em] text-faint">Notifications</span>
-        <NotificationBell />
-      </div>
+      {navOn('notifications') && (
+        <div className="mx-3 border-t border-line py-2 px-1 flex items-center justify-between">
+          <span className="text-[10.5px] font-medium uppercase tracking-[.14em] text-faint">Notifications</span>
+          <NotificationBell />
+        </div>
+      )}
 
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} onStartTour={onStartSystemTour} />}
 
@@ -1326,10 +1391,11 @@ function App() {
       case 'profile': return <Profile currentUser={authUser} onUserUpdated={handleUserUpdated} />;
       case 'media': return <Media />;
       case 'integrations': return <Integrations />;
-      case 'marketing': return <MarketingOverview navigateToPage={navigateToPage} />;
+      case 'marketing': return <MarketingOverview navigateToPage={navigateToPage} disabledNav={disabledNav} />;
       case 'sales-overview': return <SalesOverview />;
       case 'sales-leads': return <SalesLeadWorkspace />;
       case 'sales-ai-calling': return <SalesLeads />;
+      case 'sales-events': return <SalesEvents />;
       case 'sales-conversations': return <SalesConversations />;
       case 'sales-followups': return <SalesFollowUps />;
       case 'sales-intelligence': return <SalesIntelligence />;
@@ -1421,7 +1487,8 @@ function App() {
                   >
                     Overview
                   </button>
-                )}                <NotificationBell />
+                )}
+                {!disabledNav.has('notifications') && <NotificationBell />}
                 <span className="os-topbar-date">
                   {new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date())}
                 </span>

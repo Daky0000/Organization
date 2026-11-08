@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlarmClock, AlertTriangle, CheckSquare, Columns, FolderPlus, Inbox, Layers, Loader2, Merge, Pencil, PhoneCall, Plus, Search, Sparkles,
   Trash2, Upload, UserPlus, Users, X,
@@ -14,6 +14,7 @@ import ImportWizard from '../components/sales/leads/ImportWizard';
 import AiCallDialog from '../components/sales/leads/AiCallDialog';
 import CallApprovalQueue from '../components/sales/leads/CallApprovalQueue';
 import { useLeadParam } from '../components/sales/leads/useLeadParam';
+import LeadPagination from '../components/sales/leads/LeadPagination';
 
 type View =
   | { kind: 'all' }
@@ -26,8 +27,6 @@ const SMART_VIEWS = [
   { id: 'needs_confirmation', label: 'Confirm AI reminders', icon: Sparkles },
   { id: 'never', label: 'Never contacted', icon: Inbox },
 ] as const;
-
-const PAGE = 100;
 
 function NewListForm({ onCreated, onCancel }: { onCreated: (l: LeadList) => void; onCancel: () => void }) {
   const [name, setName] = useState('');
@@ -235,27 +234,46 @@ export default function SalesLeadWorkspace() {
     sort,
   }), [view, search, stage, status, sort]);
 
-  const load = useCallback(async (append = false) => {
+  // The page number belongs to one query: change a filter, the list or the
+  // page size and it falls back to page 1 without a second fetch.
+  const [pageSize, setPageSize] = useState(50);
+  const queryKey = `${JSON.stringify(query)}|${pageSize}`;
+  const [pageState, setPageState] = useState({ key: queryKey, page: 1 });
+  const page = pageState.key === queryKey ? pageState.page : 1;
+  const topRef = useRef<HTMLDivElement>(null);
+  const goToPage = (p: number) => {
+    setPageState({ key: queryKey, page: p });
+    topRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+
+  const requestId = useRef(0);
+  const load = useCallback(async () => {
+    const id = ++requestId.current;
     setLoading(true);
     try {
       setError(null);
-      const res = await salesService.listWorkspaceLeads({ ...query, limit: PAGE, offset: append ? leads.length : 0 });
-      setLeads(append ? [...leads, ...res.leads] : res.leads);
+      const res = await salesService.listWorkspaceLeads({ ...query, limit: pageSize, offset: (page - 1) * pageSize });
+      if (id !== requestId.current) return; // a newer page or filter won
+      // Deleting the last leads on the last page leaves it empty: step back.
+      if (res.leads.length === 0 && res.total > 0 && page > 1) {
+        setPageState({ key: queryKey, page: Math.ceil(res.total / pageSize) });
+        return;
+      }
+      setLeads(res.leads);
       setTotal(res.total);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load leads');
+      if (id === requestId.current) setError(err instanceof Error ? err.message : 'Failed to load leads');
     } finally {
-      setLoading(false);
+      if (id === requestId.current) setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, page, pageSize, queryKey]);
 
   useEffect(() => { void loadMeta(); void salesService.ensureReminderTimezone(); }, [loadMeta]);
   useEffect(() => {
-    const t = setTimeout(() => void load(false), search ? 300 : 0);
+    const t = setTimeout(() => void load(), search ? 300 : 0);
     return () => clearTimeout(t);
   }, [load, search]);
-  useEffect(() => { setSelected(new Set()); }, [query]);
+  useEffect(() => { setSelected(new Set()); }, [query, page, pageSize]);
 
   // Columns are one set per user; a list's table only shows the custom columns
   // its own leads use, so sheets imported from one workbook don't share headers.
@@ -277,7 +295,7 @@ export default function SalesLeadWorkspace() {
       : fields
   ), [fields, listKeys, viewListId]);
 
-  const refresh = () => { void load(false); void loadMeta(); };
+  const refresh = () => { void load(); void loadMeta(); };
 
   const saveCell = async (lead: WorkspaceLead, patch: Record<string, unknown>) => {
     try {
@@ -438,7 +456,7 @@ export default function SalesLeadWorkspace() {
       </nav>
 
       {/* Main */}
-      <div className="min-w-0 flex-1 space-y-4">
+      <div ref={topRef} className="min-w-0 flex-1 scroll-mt-6 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-2xl font-black tracking-tight text-slate-950">{title}</h1>
@@ -557,28 +575,28 @@ export default function SalesLeadWorkspace() {
             )}
           </div>
         ) : (
-          <LeadGrid
-            leads={leads} fields={tableFields} selected={selected} groupBy={groupBy}
-            onToggle={(id) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; })}
-            onToggleAll={(ids, on) => setSelected(on ? new Set(ids) : new Set())}
-            onOpen={(id) => setOpenLead(id)}
-            onSave={saveCell}
-          />
+          <div aria-busy={loading} className={`transition-opacity ${loading ? 'opacity-60' : ''}`}>
+            <LeadGrid
+              leads={leads} fields={tableFields} selected={selected} groupBy={groupBy}
+              onToggle={(id) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; })}
+              onToggleAll={(ids, on) => setSelected(on ? new Set(ids) : new Set())}
+              onOpen={(id) => setOpenLead(id)}
+              onSave={saveCell}
+            />
+          </div>
         )}
 
-        <div className="flex items-center justify-center gap-3 text-sm text-slate-500">
-          {loading && <Loader2 size={16} className="animate-spin" />}
-          {!loading && leads.length < total && (
-            <button type="button" onClick={() => void load(true)} className="rounded-xl border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">
-              Load more ({total - leads.length} left)
-            </button>
-          )}
-        </div>
+        {loading && leads.length === 0 && (
+          <div className="flex justify-center text-slate-500"><Loader2 size={16} className="animate-spin" /></div>
+        )}
+        {total > 0 && (
+          <LeadPagination page={page} pageSize={pageSize} total={total} onPage={goToPage} onPageSize={setPageSize} />
+        )}
       </div>
 
       {openLead && (
         <LeadDrawer contactId={openLead} fields={fields} lists={lists}
-          onClose={() => setOpenLead(null)} onChanged={() => void load(false)} />
+          onClose={() => setOpenLead(null)} onChanged={() => void load()} />
       )}
       {confirmListDelete && (
         <DeleteListsDialog
@@ -610,7 +628,7 @@ export default function SalesLeadWorkspace() {
         onSaved={(f, keys) => {
           if (activeList && keys) setListKeys({ listId: activeList.id, keys: new Set(keys) });
           setFields(f);
-          void load(false);
+          void load();
         }}
       />
       {showImport && (
