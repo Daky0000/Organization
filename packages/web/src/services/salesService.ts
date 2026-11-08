@@ -1026,6 +1026,53 @@ export function callStatusLabel(status: string | null | undefined, outcome?: str
   }
 }
 
+/**
+ * Why a call ended, in plain words, with what to change when it is a setup
+ * problem. Vapi's endedReason codes are precise but cryptic
+ * ("twilio-failed-to-connect-call"); the common ones are explained here.
+ */
+export function explainEndedReason(reason: string | null | undefined): { text: string; fix: string | null } | null {
+  const r = String(reason ?? '').toLowerCase();
+  if (!r) return null;
+  const has = (s: string) => r.includes(s);
+  if (has('vapi-number-international') || has('international')) {
+    return { text: 'The calling number is not allowed to call other countries.',
+      fix: 'Use your Twilio number (not a free Vapi number) under "Calls are placed from", and turn on the destination country in Twilio → Voice → Geo permissions.' };
+  }
+  if (has('daily-limit') || has('outbound-daily')) {
+    return { text: 'The calling number reached its daily call limit.', fix: 'Use your own Twilio number, or try again tomorrow.' };
+  }
+  if (has('twilio-failed-to-connect') || has('failed-to-connect') || has('get-transport') || has('sip-') || has('telephony')) {
+    return { text: 'The phone network would not connect the call.',
+      fix: 'In Twilio: turn on Ghana (and each country you call) under Voice → Settings → Geo permissions; on a trial account, verify the number first or upgrade. A toll-free caller ID is also refused by some carriers — a local number works better.' };
+  }
+  if (has('misdialed') || has('invalid-number') || has('does-not-exist') || has('invalid-destination')) {
+    return { text: 'The network says this number does not exist.', fix: 'Check the number and its country code.' };
+  }
+  if (has('did-not-answer') || has('no-answer')) return { text: 'Rang, but nobody picked up.', fix: null };
+  if (has('busy')) return { text: 'The line was busy, or the call was declined.', fix: null };
+  if (has('voicemail')) return { text: 'Went to voicemail.', fix: null };
+  if (has('customer-ended')) return { text: 'The person hung up.', fix: null };
+  if (has('assistant-ended') || has('end-call-phrase')) return { text: 'The agent ended the call.', fix: null };
+  if (has('silence-timed-out')) return { text: 'Nobody spoke, so the call ended.', fix: null };
+  if (has('exceeded-max-duration')) return { text: 'The call reached the maximum length.', fix: 'Raise "Max call length" on the admin page if calls need longer.' };
+  if (has('manually-canceled') || has('hangup') || has('call-control')) return { text: 'The call was hung up from the app.', fix: null };
+  if (has('openai') || has('anthropic') || has('google') || has('groq') || has('model')) {
+    return { text: 'The AI model behind the agent failed.', fix: 'Pick a different model on the admin page (Voice and model) and save.' };
+  }
+  if (has('eleven-labs') || has('11labs') || has('cartesia') || has('playht') || has('azure') || has('voice')) {
+    return { text: 'The voice service failed.', fix: 'Pick a different voice on the admin page and save.' };
+  }
+  if (has('deepgram') || has('transcriber')) return { text: 'The speech-to-text service failed.', fix: 'Try again; if it repeats, contact Vapi support.' };
+  if (has('credit') || has('billing') || has('payment') || has('wallet')) {
+    return { text: 'The Vapi account is out of credit.', fix: 'Add credit at dashboard.vapi.ai → Billing.' };
+  }
+  if (has('pipeline-error') || has('vapifault') || has('error')) {
+    return { text: 'Vapi hit an error running the call.', fix: 'Try again. If it repeats, send the code below to Vapi support.' };
+  }
+  return null;
+}
+
 export const CALL_TONE_CLASSES: Record<'live' | 'good' | 'bad' | 'neutral', string> = {
   live: 'bg-blue-50 text-blue-700',
   good: 'bg-emerald-50 text-emerald-700',

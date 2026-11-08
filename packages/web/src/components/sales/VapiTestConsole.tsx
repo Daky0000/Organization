@@ -4,7 +4,7 @@ import {
   RefreshCw, Sparkles, XCircle,
 } from 'lucide-react';
 import {
-  CALL_TONE_CLASSES, callStatusLabel, formatDateTime, formatDuration, isCallLive, salesService,
+  CALL_TONE_CLASSES, callStatusLabel, explainEndedReason, formatDateTime, formatDuration, isCallLive, salesService,
   type PhoneInfo, type SalesLead, type TestCallRecord, type VapiStatus,
 } from '../../services/salesService';
 
@@ -544,9 +544,16 @@ export default function VapiTestConsole({ leads = [], testNumbers = [] }: {
                     )}
                   </span>
                 </div>
-                {call.ended_reason && !live && (
-                  <p className="mt-1 text-[11px] text-slate-400">Vapi: {call.ended_reason.replace(/-/g, ' ')}</p>
-                )}
+                {call.ended_reason && !live && (() => {
+                  const why = explainEndedReason(call.ended_reason);
+                  return (
+                    <div className="mt-1 text-xs">
+                      {why && <p className="text-slate-600">{why.text}</p>}
+                      {why?.fix && <p className="mt-0.5 rounded-lg bg-amber-50 px-2 py-1 text-amber-800">Fix: {why.fix}</p>}
+                      <p className="mt-0.5 font-mono text-[11px] text-slate-400">Vapi code: {call.ended_reason}</p>
+                    </div>
+                  );
+                })()}
                 {call.last_error && <p className="mt-1 text-xs text-rose-600">{call.last_error}</p>}
                 {call.transcript && (
                   <details className="mt-1.5">

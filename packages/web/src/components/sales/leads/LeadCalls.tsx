@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Loader2, PhoneCall, PhoneOff } from 'lucide-react';
 import {
-  CALL_TONE_CLASSES, CALL_TYPE_LABELS, callStatusLabel, formatDateTime, isCallLive, salesService,
+  CALL_TONE_CLASSES, CALL_TYPE_LABELS, callStatusLabel, explainEndedReason, formatDateTime, isCallLive, salesService,
   type SalesCallAttempt,
 } from '../../../services/salesService';
 
@@ -75,6 +75,15 @@ export default function LeadCalls({ contactId, refreshKey }: { contactId: string
               </div>
               {c.status === 'blocked' && c.block_reason && <p className="mt-1 text-xs text-slate-500">{c.block_reason}</p>}
               {c.status === 'failed' && c.last_error && <p className="mt-1 text-xs text-rose-600">{c.last_error}</p>}
+              {!live && st.tone !== 'good' && (() => {
+                const why = explainEndedReason(c.ended_reason);
+                if (!why) return null;
+                return (
+                  <p className="mt-1 text-xs text-slate-600">
+                    {why.text}{why.fix && <span className="text-amber-700"> Fix: {why.fix}</span>}
+                  </p>
+                );
+              })()}
               {c.call_note && <p className="mt-1 text-xs text-slate-500">Notes: {c.call_note}</p>}
               {c.summary && <p className="mt-1 text-sm text-slate-700">{c.summary}</p>}
               {c.recording_url && (
