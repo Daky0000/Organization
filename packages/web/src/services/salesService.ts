@@ -437,6 +437,14 @@ export interface VapiStatus {
   hasPublicKey: boolean;
 }
 
+export interface PhoneInfo {
+  valid: boolean;
+  e164: string | null;
+  country: string | null;
+  countryName: string | null;
+  type: string | null;
+}
+
 export interface TestCallRecord {
   id: string;
   to_number: string | null;
@@ -871,7 +879,14 @@ export const salesService = {
     );
   },
 
-  async placeTestCall(payload: { to_number: string; context: string; first_message?: string; voice_id?: string }) {
+  async inspectPhone(number: string, country?: string) {
+    const q = new URLSearchParams({ number, ...(country ? { country } : {}) });
+    return assertSuccess(
+      await api.get<{ success: boolean; error?: string; localCountry: string; phone: PhoneInfo }>(`/api/sales/phone/inspect?${q}`),
+    );
+  },
+
+  async placeTestCall(payload: { to_number: string; country?: string; context: string; first_message?: string; voice_id?: string }) {
     return assertSuccess(
       await api.post<{ success: boolean; error?: string; attemptId: string; externalId: string }>(
         '/api/sales/test-call/phone',

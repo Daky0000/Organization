@@ -13,7 +13,8 @@ import type { Request } from '../types/http.ts';
 import type { Pool } from 'pg';
 import { logger } from '../logger.ts';
 import { buildSalesEngine, type SalesEngine } from './sales/salesEngine.ts';
-import { toE164 } from './sales/orgAgent.ts';
+import { describePhone, toCountryCode } from './sales/orgAgent.ts';
+import type { CountryCode } from 'libphonenumber-js/max';
 import { scoreCallWindows } from './sales/callTiming.ts';
 import { runInsightAgent } from './sales/insightAgent.ts';
 import {
@@ -681,16 +682,29 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
     }
   });
 
+  /** The country to read a local "0…" number in: the one asked for, else the org default. */
+  const localCountry = async (requested: unknown): Promise<CountryCode> =>
+    (toCountryCode(typeof requested === 'string' ? requested : null) ??
+      (await salesEngine.getOrgAgent()).defaultCountry) as CountryCode;
+
+  /** What a typed number is — country, line type, E.164 — before anything dials. */
+  router.get('/phone/inspect', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    const country = await localCountry(req.query.country);
+    res.json({ success: true, localCountry: country, phone: describePhone(String(req.query.number ?? ''), country) });
+  });
+
   /** Place a real outbound test call. Rate-limited; always discloses the AI. */
   router.post('/test-call/phone', async (req, res) => {
     const auth = requireAuth(req, res);
     if (!auth) return;
     try {
-      const { to_number, context, first_message, voice_id } = req.body ?? {};
-      // Local Ghana numbers (0545950611) are accepted and converted to +233….
-      const toNumber = toE164(to_number ? String(to_number) : null);
+      const { to_number, context, first_message, voice_id, country } = req.body ?? {};
+      // Any country. A local number (0…) is read in `country`, else the org default.
+      const toNumber = describePhone(to_number ? String(to_number) : null, await localCountry(country)).e164;
       if (!toNumber) {
-        return fail(res, 400, 'Enter a valid phone number, e.g. 0545950611 or +233545950611');
+        return fail(res, 400, 'Not a valid phone number. Include the country code (e.g. +228 for Togo, +229 for Benin, +44 for the UK), or pick the country for a local number.');
       }
       if (!context || !String(context).trim()) return fail(res, 400, 'A context for the agent is required');
 

@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import {
   formatDuration, salesService,
-  type SalesLead, type TestCallRecord, type VapiStatus,
+  type PhoneInfo, type SalesLead, type TestCallRecord, type VapiStatus,
 } from '../../services/salesService';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -37,6 +37,19 @@ Do not:
 type TranscriptLine = { role: 'user' | 'assistant'; text: string };
 type WebState = 'idle' | 'connecting' | 'live' | 'ended';
 
+const regionNames = (() => {
+  try { return new Intl.DisplayNames(['en'], { type: 'region' }); } catch { return null; }
+})();
+const regionName = (code: string) => { try { return regionNames?.of(code) ?? code; } catch { return code; } };
+// West Africa first (where Africon calls most), then the rest of Africa, Europe and beyond.
+const COUNTRY_CODES = [
+  'GH', 'TG', 'BJ', 'NG', 'CI', 'BF', 'SN', 'ML', 'NE', 'LR', 'SL', 'GN', 'GM', 'CM',
+  'KE', 'UG', 'TZ', 'RW', 'ET', 'ZA', 'ZM', 'ZW', 'EG', 'MA', 'TN', 'DZ',
+  'GB', 'IE', 'FR', 'DE', 'NL', 'BE', 'ES', 'PT', 'IT', 'CH', 'SE', 'NO', 'DK', 'PL',
+  'US', 'CA', 'AE', 'SA', 'QA', 'IN', 'CN', 'AU',
+];
+const COUNTRY_OPTIONS = COUNTRY_CODES.map((code) => ({ code, name: regionName(code) }));
+
 /** Minimal surface of the lazily-loaded @vapi-ai/web client. */
 type VapiClient = {
   start: (assistant: unknown) => Promise<unknown>;
@@ -54,6 +67,10 @@ export default function VapiTestConsole({ leads = [] }: { leads?: SalesLead[] })
   const [context, setContext] = useState(DEFAULT_CONTEXT);
   const [firstMessage, setFirstMessage] = useState('');
   const [toNumber, setToNumber] = useState('');
+  // Country for a local number (0…). Blank = the organisation default.
+  const [country, setCountry] = useState('');
+  const [phoneInfo, setPhoneInfo] = useState<PhoneInfo | null>(null);
+  const [localCountry, setLocalCountry] = useState<string>('GH');
   const [placing, setPlacing] = useState(false);
   const [placed, setPlaced] = useState<string | null>(null);
   const [history, setHistory] = useState<TestCallRecord[]>([]);
@@ -157,6 +174,18 @@ export default function VapiTestConsole({ leads = [] }: { leads?: SalesLead[] })
     try { vapiRef.current?.setMuted(next); setMuted(next); } catch { /* no live call */ }
   };
 
+  // Show what the typed number is — country, line type, the exact number dialled.
+  useEffect(() => {
+    const raw = toNumber.trim();
+    if (raw.replace(/\D/g, '').length < 6) { setPhoneInfo(null); return; }
+    const t = setTimeout(() => {
+      salesService.inspectPhone(raw, country || undefined)
+        .then((r) => { setPhoneInfo(r.phone); setLocalCountry(r.localCountry); })
+        .catch(() => setPhoneInfo(null));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [toNumber, country]);
+
   const placePhoneCall = async () => {
     setError(null);
     setPlaced(null);
@@ -164,10 +193,11 @@ export default function VapiTestConsole({ leads = [] }: { leads?: SalesLead[] })
     try {
       await salesService.placeTestCall({
         to_number: toNumber,
+        country: country || undefined,
         context,
         first_message: firstMessage || undefined,
       });
-      setPlaced(`Calling ${toNumber} now. The transcript appears below once the call ends.`);
+      setPlaced(`Calling ${phoneInfo?.e164 ?? toNumber}${phoneInfo?.countryName ? ` (${phoneInfo.countryName})` : ''} now. The transcript appears below once the call ends.`);
       setTimeout(() => void loadHistory(), 4000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to place the test call');
@@ -355,16 +385,37 @@ export default function VapiTestConsole({ leads = [] }: { leads?: SalesLead[] })
           <p className="mt-1 text-xs text-slate-500">
             Placed server-side with the private key. Capped at 3 minutes, 5 tests an hour.
           </p>
-          <input
-            value={toNumber}
-            onChange={(e) => setToNumber(e.target.value)}
-            placeholder="0545950611 or +233545950611"
-            className="mt-3 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
-          />
+          <div className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2">
+            <select
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+              aria-label="Country for a local number"
+              className="w-full rounded-xl border border-slate-200 px-2 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+            >
+              <option value="">Local: {regionName(localCountry)}</option>
+              {COUNTRY_OPTIONS.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
+            </select>
+            <input
+              value={toNumber}
+              onChange={(e) => setToNumber(e.target.value)}
+              placeholder="+228 90 12 34 56 or 0545950611"
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+            />
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            Any country. With a country code (+228, +229, +44…) it is detected; a number starting with 0 is read in the country on the left.
+          </p>
+          {toNumber.trim() && phoneInfo && (
+            <p className={`mt-1 text-xs ${phoneInfo.valid ? 'text-emerald-700' : 'text-rose-600'}`}>
+              {phoneInfo.valid
+                ? `${phoneInfo.countryName ?? phoneInfo.country} · ${(phoneInfo.type ?? 'number').toLowerCase().replace(/_/g, ' ')} · dials ${phoneInfo.e164}`
+                : 'Not a valid number — add the country code, or pick the country for a local number.'}
+            </p>
+          )}
           <button
             type="button"
             onClick={() => void placePhoneCall()}
-            disabled={!canPhoneCall || placing || !toNumber.trim() || !context.trim()}
+            disabled={!canPhoneCall || placing || !toNumber.trim() || !context.trim() || phoneInfo?.valid === false}
             className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
             style={{ background: ACCENT }}
           >

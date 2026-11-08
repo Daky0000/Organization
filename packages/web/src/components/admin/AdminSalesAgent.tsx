@@ -17,7 +17,7 @@ type AgentConfig = {
   endCallMessage: string; voicemailMessage: string; inboundFirstMessage: string;
   provider: 'vapi' | 'simulator'; voiceProvider: string; voiceId: string;
   modelProvider: string; model: string; temperature: number;
-  maxCallDurationSec: number; silenceTimeoutSec: number;
+  maxCallDurationSec: number; silenceTimeoutSec: number; defaultCountry: string;
 };
 type View = {
   success: boolean; error?: string; config: AgentConfig; defaults: AgentConfig; customised: boolean;
@@ -42,6 +42,11 @@ const VOICE_PROVIDERS = [
   { id: 'playht', label: 'PlayHT' },
   { id: 'deepgram', label: 'Deepgram' },
 ];
+const regionNames = (() => { try { return new Intl.DisplayNames(['en'], { type: 'region' }); } catch { return null; } })();
+const COUNTRY_CHOICES = [
+  'GH', 'TG', 'BJ', 'NG', 'CI', 'BF', 'SN', 'ML', 'NE', 'LR', 'SL', 'GN', 'GM', 'CM', 'KE', 'UG', 'TZ', 'RW', 'ET', 'ZA',
+  'EG', 'MA', 'GB', 'IE', 'FR', 'DE', 'NL', 'BE', 'ES', 'PT', 'IT', 'CH', 'US', 'CA', 'AE',
+].map((code) => ({ code, name: (() => { try { return regionNames?.of(code) ?? code; } catch { return code; } })() }));
 const MODEL_PROVIDERS = ['openai', 'anthropic', 'google', 'groq'];
 // Models Vapi accepts for OpenAI, fastest first. Other providers: type the model name.
 const OPENAI_MODELS = ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o-mini', 'gpt-4o', 'gpt-5-mini', 'gpt-5.4-mini', 'gpt-5.4', 'gpt-5.5'];
@@ -239,6 +244,16 @@ export default function AdminSalesAgent() {
             <input type="number" min={10} max={120} value={draft.silenceTimeoutSec} onChange={(e) => set('silenceTimeoutSec', Number(e.target.value))} className={inputCls} />
           </Field>
         </div>
+        <Field label="Country for local numbers"
+          hint="Calls go to any country. Numbers with a country code (+228, +229, +44…) are detected from it. A number starting with 0 is read in the lead's company country, or this one when that is unknown.">
+          <select value={draft.defaultCountry} onChange={(e) => set('defaultCountry', e.target.value)} className={inputCls}>
+            {COUNTRY_CHOICES.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
+          </select>
+        </Field>
+        <p className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          Calling abroad from a Twilio number: turn on each destination country in Twilio Console → Voice → Settings → Geo permissions,
+          or calls there are blocked. Trial Twilio accounts can only call verified numbers.
+        </p>
         {draft.provider === 'vapi' && (
           <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
             Vapi bills per minute. Telephony minutes are not metered by the credit system — watch the Vapi dashboard.

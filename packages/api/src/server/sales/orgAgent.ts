@@ -13,7 +13,7 @@
 // page is where they get updated.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js';
+import { getCountries, parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js/max';
 
 export const SALES_AGENT_PLATFORM = 'sales_agent';
 
@@ -71,6 +71,8 @@ export interface OrgAgentConfig {
   temperature: number;
   maxCallDurationSec: number;
   silenceTimeoutSec: number;
+  /** ISO country used to read local numbers (0…) when the lead's country is unknown. */
+  defaultCountry: string;
 }
 
 const AFRICON_KNOWLEDGE = `WHO WE ARE
@@ -164,6 +166,7 @@ export const AFRICON_DEFAULT_AGENT: OrgAgentConfig = {
   temperature: 0.4,
   maxCallDurationSec: 420,
   silenceTimeoutSec: 30,
+  defaultCountry: 'GH',
 };
 
 /** OpenAI models Vapi accepts (from Vapi's own validation error, 2026-11-08). */
@@ -175,24 +178,72 @@ export const VAPI_OPENAI_MODELS = new Set([
   'gpt-4o-2024-11-20', 'gpt-4o-2024-08-06', 'gpt-4o-mini-2024-07-18', 'gpt-4-turbo', 'gpt-4',
 ]);
 
+const regionNames = (() => {
+  try { return new Intl.DisplayNames(['en'], { type: 'region' }); } catch { return null; }
+})();
+
+/** "Ghana" for "GH". */
+export function countryName(code: string | null | undefined): string | null {
+  if (!code) return null;
+  try { return regionNames?.of(code) ?? code; } catch { return code; }
+}
+
+/** Accept an ISO code ("TG") or an English country name ("Togo", "Côte d'Ivoire"). */
+export function toCountryCode(value: string | null | undefined): CountryCode | null {
+  const v = String(value ?? '').trim();
+  if (!v) return null;
+  const codes = getCountries();
+  const upper = v.toUpperCase();
+  if ((codes as string[]).includes(upper)) return upper as CountryCode;
+  const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]/g, '');
+  const target = fold(v);
+  const aliases: Record<string, CountryCode> = { uk: 'GB', usa: 'US', unitedstatesofamerica: 'US', ivorycoast: 'CI', drc: 'CD' };
+  if (aliases[target]) return aliases[target];
+  return codes.find((c) => fold(countryName(c) ?? '') === target) ?? null;
+}
+
+export interface PhoneInfo {
+  valid: boolean;
+  e164: string | null;
+  country: string | null;
+  countryName: string | null;
+  /** MOBILE, FIXED_LINE, TOLL_FREE… when known. */
+  type: string | null;
+}
+
 /**
- * Normalise a phone number to E.164, which Vapi requires. Local numbers
- * ("0545950611") get the default country code — Ghana, where Africon calls.
- * Returns null when the result cannot be a valid number.
+ * Work out what a number is, for any country. A number with a country code —
+ * "+228…", "00228…", or "228…" without the plus — is detected from that code.
+ * A local number ("0545950611") is read in `localCountry`: the lead's own
+ * country when known, else the organisation default (Ghana for Africon).
  */
-export function toE164(raw: string | null | undefined, defaultCountry: CountryCode = 'GH'): string | null {
+export function describePhone(raw: string | null | undefined, localCountry: CountryCode = 'GH'): PhoneInfo {
+  const none: PhoneInfo = { valid: false, e164: null, country: null, countryName: null, type: null };
   let n = String(raw ?? '').trim().replace(/[\s\-().]/g, '');
-  if (!n) return null;
+  if (!n) return none;
   if (n.startsWith('00')) n = `+${n.slice(2)}`;
-  const valid = (s: string, country?: CountryCode) => {
+  const parse = (s: string, country?: CountryCode) => {
     const p = parsePhoneNumberFromString(s, country);
-    return p && p.isValid() ? p.number : null;
+    return p && p.isValid() ? p : null;
   };
-  if (n.startsWith('+')) return valid(n);
-  // No "+": first read it as a local number in the default country
-  // (0545950611 → +233545950611), then as an international number written
-  // without the "+" (14155550100 → +14155550100, 233545950611 → +233…).
-  return valid(n, defaultCountry) ?? valid(`+${n}`);
+  const p = n.startsWith('+')
+    ? parse(n)
+    // No "+": a local number in the local country first, then an
+    // international number written without its "+".
+    : parse(n, localCountry) ?? (n.startsWith('0') ? null : parse(`+${n}`));
+  if (!p) return none;
+  return {
+    valid: true,
+    e164: p.number,
+    country: p.country ?? null,
+    countryName: countryName(p.country ?? null),
+    type: p.getType() ?? null,
+  };
+}
+
+/** E.164 for Vapi, or null when the number cannot be valid. */
+export function toE164(raw: string | null | undefined, localCountry: CountryCode = 'GH'): string | null {
+  return describePhone(raw, localCountry).e164;
 }
 
 const STRING_FIELDS = [
@@ -218,6 +269,7 @@ export function resolveOrgAgent(stored: Record<string, unknown> | null | undefin
     if (v.trim() || blankAllowed) (out as any)[key] = v.slice(0, LIMITS[key] ?? 2_000);
   }
   if (s.provider === 'vapi' || s.provider === 'simulator') out.provider = s.provider;
+  out.defaultCountry = toCountryCode(typeof s.defaultCountry === 'string' ? s.defaultCountry : null) ?? AFRICON_DEFAULT_AGENT.defaultCountry;
   out.model = out.model.trim();
   out.modelProvider = out.modelProvider.trim().toLowerCase();
   // Earlier defaults Vapi rejects, or an OpenAI model Vapi does not accept:

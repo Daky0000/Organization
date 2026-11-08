@@ -105,3 +105,20 @@ test('international numbers written without + are not given +233', async () => {
   assert.equal(toE164('+1 (415) 555-0123'), '+14155550123');
   assert.equal(toE164('545950611'), '+233545950611');
 });
+
+test('numbers from any country are detected, local ones read in the given country', async () => {
+  const { describePhone, toCountryCode } = await import('../src/server/sales/orgAgent.ts');
+  const togo = describePhone('+228 90 12 34 56');
+  assert.equal(togo.country, 'TG');
+  assert.equal(togo.e164, '+22890123456');
+  assert.equal(describePhone('22890123456').country, 'TG'); // no "+"
+  assert.equal(describePhone('0803 123 4567', 'NG').e164, '+2348031234567');
+  assert.equal(describePhone('+33 6 12 34 56 78').country, 'FR');
+  assert.equal(describePhone('0545950611').country, 'GH');
+  assert.equal(describePhone('0545950611').type, 'MOBILE');
+  assert.equal(describePhone('not a number').valid, false);
+  assert.equal(toCountryCode('Togo'), 'TG');
+  assert.equal(toCountryCode("Côte d'Ivoire"), 'CI');
+  assert.equal(toCountryCode('bj'), 'BJ');
+  assert.equal(toCountryCode('Narnia'), null);
+});

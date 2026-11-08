@@ -26,7 +26,8 @@ import { isCallType, policyFromRow, type CallType, type LeadStage, type SalesCal
 import { SimulatorProvider } from './providers/simulator.ts';
 import { VapiProvider } from './providers/vapi.ts';
 import type { CallEvent, CallProvider } from './providers/index.ts';
-import { fillTemplate, getOrgAgent, type OrgAgentConfig } from './orgAgent.ts';
+import { describePhone, fillTemplate, getOrgAgent, toCountryCode, type OrgAgentConfig } from './orgAgent.ts';
+import type { CountryCode } from 'libphonenumber-js/max';
 
 export interface SalesEngineDeps {
   pool: Pool;
@@ -393,8 +394,24 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
         const firstMessage = applyDisclosures(brief.firstMessage, ctx.policy, null, agent);
         const bucket = localBucket(new Date(), ctx.timezone);
 
+        // Any country: a number with its country code is read from that code;
+        // a local "0…" number is read in the lead's company country, else the
+        // org default. A number that cannot be valid fails here, not at Vapi.
+        const rawNumber = attempt.to_number || ctx.phone || '';
+        const leadCountry = await getLeadSheetContext(pool, attempt.user_id, attempt.contact_id)
+          .then((s) => toCountryCode(s?.company?.country))
+          .catch(() => null);
+        const phone = describePhone(rawNumber, leadCountry ?? (agent.defaultCountry as CountryCode));
+        if (!phone.e164) {
+          await pool.query(
+            `UPDATE sales_call_attempts SET status='failed', outcome='invalid_number', last_error=$1, updated_at=NOW() WHERE id=$2`,
+            [`"${rawNumber}" is not a valid phone number. Add the country code, e.g. +228… for Togo.`, attempt.id],
+          );
+          continue;
+        }
+
         const { externalId } = await provider.placeCall({
-          toNumber: attempt.to_number || ctx.phone || '',
+          toNumber: phone.e164,
           fromNumber: ctx.policy.fromNumber,
           firstMessage,
           systemPrompt: brief.systemPrompt,
