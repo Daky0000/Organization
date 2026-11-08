@@ -70,10 +70,25 @@ function extractTranscript(artifact: Record<string, any> | undefined): string | 
   return lines.length ? lines.join('\n') : null;
 }
 
+/** Org-wide voice agent settings (Admin → Sales Voice Agent). All optional. */
+export interface VapiAgentOptions {
+  name?: string | null;
+  voiceProvider?: string | null;
+  modelProvider?: string | null;
+  model?: string | null;
+  temperature?: number | null;
+  silenceTimeoutSec?: number | null;
+  endCallMessage?: string | null;
+  voicemailMessage?: string | null;
+}
+
 export class VapiProvider implements CallProvider {
   readonly id = 'vapi';
 
-  constructor(private readonly cfg: ProviderConfig) {}
+  constructor(
+    private readonly cfg: ProviderConfig,
+    private readonly agentDefaults: VapiAgentOptions | null = null,
+  ) {}
 
   isConfigured(): boolean {
     return Boolean(this.cfg.apiKey && this.cfg.phoneNumberId);
@@ -85,21 +100,29 @@ export class VapiProvider implements CallProvider {
    * Web SDK with the PUBLIC key), so a developer testing in the browser is
    * exercising the same agent that will dial a lead — not an approximation.
    */
-  buildAssistant(req: Pick<PlaceCallRequest, 'firstMessage' | 'systemPrompt' | 'voiceId' | 'maxDurationSec' | 'recordingEnabled'>): Record<string, unknown> {
+  buildAssistant(
+    req: Pick<PlaceCallRequest, 'firstMessage' | 'systemPrompt' | 'voiceId' | 'maxDurationSec' | 'recordingEnabled'>,
+    agent: VapiAgentOptions | null = this.agentDefaults,
+  ): Record<string, unknown> {
+    const model: Record<string, unknown> = {
+      provider: agent?.modelProvider || 'anthropic',
+      model: agent?.model || 'claude-haiku-4-5',
+      messages: [{ role: 'system', content: req.systemPrompt }],
+    };
+    if (typeof agent?.temperature === 'number') model.temperature = agent.temperature;
     const assistant: Record<string, unknown> = {
       firstMessage: req.firstMessage,
       maxDurationSeconds: req.maxDurationSec,
-      model: {
-        provider: 'anthropic',
-        model: 'claude-haiku-4-5',
-        messages: [{ role: 'system', content: req.systemPrompt }],
-      },
+      model,
       // Ending on silence keeps a voicemail from burning the full duration.
-      silenceTimeoutSeconds: 30,
+      silenceTimeoutSeconds: agent?.silenceTimeoutSec || 30,
       recordingEnabled: req.recordingEnabled,
     };
+    if (agent?.name) assistant.name = agent.name.slice(0, 40);
+    if (agent?.endCallMessage) assistant.endCallMessage = agent.endCallMessage;
+    if (agent?.voicemailMessage) assistant.voicemailMessage = agent.voicemailMessage;
     if (req.voiceId) {
-      assistant.voice = { provider: '11labs', voiceId: req.voiceId };
+      assistant.voice = { provider: agent?.voiceProvider || '11labs', voiceId: req.voiceId };
     }
     return assistant;
   }

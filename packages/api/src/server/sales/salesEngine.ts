@@ -26,6 +26,7 @@ import { isCallType, policyFromRow, type CallType, type LeadStage, type SalesCal
 import { SimulatorProvider } from './providers/simulator.ts';
 import { VapiProvider } from './providers/vapi.ts';
 import type { CallEvent, CallProvider } from './providers/index.ts';
+import { fillTemplate, getOrgAgent, type OrgAgentConfig } from './orgAgent.ts';
 
 export interface SalesEngineDeps {
   pool: Pool;
@@ -59,29 +60,59 @@ const MAX_ANALYSIS_ATTEMPTS = 3;
 export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
   // ─── Policy + provider resolution ──────────────────────────────────────────
 
-  /** Read a user's policy, creating the conservative default row on first use. */
+  /**
+   * Read a user's policy, creating the conservative default row on first use.
+   * Provider, voice and call length are org-wide (Admin → Sales Voice Agent)
+   * and override whatever is in the user's row.
+   */
   async function getPolicy(userId: string): Promise<SalesCallPolicy> {
-    const { rows } = await pool.query(`SELECT * FROM sales_call_policies WHERE user_id=$1`, [userId]);
-    if (rows[0]) return policyFromRow(rows[0]);
+    const [{ rows }, agent] = await Promise.all([
+      pool.query(`SELECT * FROM sales_call_policies WHERE user_id=$1`, [userId]),
+      getOrgAgent(getPlatformConfig),
+    ]);
+    const withOrg = (p: SalesCallPolicy): SalesCallPolicy => ({
+      ...p,
+      provider: agent.provider,
+      voiceId: agent.voiceId || null,
+      maxCallDurationSec: agent.maxCallDurationSec,
+    });
+    if (rows[0]) return withOrg(policyFromRow(rows[0]));
     await pool
       .query(`INSERT INTO sales_call_policies (id, user_id) VALUES ($1,$2) ON CONFLICT (user_id) DO NOTHING`, [
         randomUUID(),
         userId,
       ])
       .catch(() => undefined);
-    return policyFromRow(null);
+    return withOrg(policyFromRow(null));
   }
 
-  async function buildVapiProvider(): Promise<VapiProvider> {
-    const cfg = await getPlatformConfig('vapi').catch(() => ({}) as Record<string, string>);
-    return new VapiProvider({
-      // apiKey is the PRIVATE key — server-side only.
-      apiKey: cfg.apiKey || cfg.privateKey || process.env.VAPI_API_KEY || '',
-      // publicKey is browser-safe and is the only one ever sent to a client.
-      publicKey: cfg.publicKey || process.env.VAPI_PUBLIC_KEY || null,
-      phoneNumberId: cfg.phoneNumberId || process.env.VAPI_PHONE_NUMBER_ID || null,
-      webhookSecret: cfg.webhookSecret || process.env.VAPI_WEBHOOK_SECRET || null,
-    });
+  const loadOrgAgent = () => getOrgAgent(getPlatformConfig);
+
+  async function buildVapiProvider(agent?: OrgAgentConfig): Promise<VapiProvider> {
+    const [cfg, org] = await Promise.all([
+      getPlatformConfig('vapi').catch(() => ({}) as Record<string, string>),
+      agent ? Promise.resolve(agent) : loadOrgAgent(),
+    ]);
+    return new VapiProvider(
+      {
+        // apiKey is the PRIVATE key — server-side only.
+        apiKey: cfg.apiKey || cfg.privateKey || process.env.VAPI_API_KEY || '',
+        // publicKey is browser-safe and is the only one ever sent to a client.
+        publicKey: cfg.publicKey || process.env.VAPI_PUBLIC_KEY || null,
+        phoneNumberId: cfg.phoneNumberId || process.env.VAPI_PHONE_NUMBER_ID || null,
+        webhookSecret: cfg.webhookSecret || process.env.VAPI_WEBHOOK_SECRET || null,
+      },
+      {
+        name: `${org.agentName} (${org.businessName})`,
+        voiceProvider: org.voiceProvider,
+        modelProvider: org.modelProvider,
+        model: org.model,
+        temperature: org.temperature,
+        silenceTimeoutSec: org.silenceTimeoutSec,
+        endCallMessage: fillTemplate(org.endCallMessage, org),
+        voicemailMessage: fillTemplate(org.voicemailMessage, org),
+      },
+    );
   }
 
   async function getProvider(policy: SalesCallPolicy): Promise<CallProvider> {
@@ -338,14 +369,16 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
           continue;
         }
 
+        const agent = await loadOrgAgent();
         const brief = await buildCallBrief(pool, {
           userId: attempt.user_id,
           contactId: attempt.contact_id,
           objective: attempt.objective,
           callType: attempt.call_type,
           note: attempt.call_note,
+          agent,
         });
-        const firstMessage = applyDisclosures(brief.firstMessage, ctx.policy);
+        const firstMessage = applyDisclosures(brief.firstMessage, ctx.policy, null, agent);
         const bucket = localBucket(new Date(), ctx.timezone);
 
         const { externalId } = await provider.placeCall({
@@ -807,13 +840,16 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     firstMessage?: string | null;
     voiceId?: string | null;
   }): Promise<{ provider: VapiProvider; assistant: Record<string, unknown>; firstMessage: string }> {
-    const provider = await buildVapiProvider();
+    const agent = await loadOrgAgent();
+    const provider = await buildVapiProvider(agent);
     const policy = await getPolicy(params.userId);
     // Disclosure is forced on for tests: aiDisclosureRequired: true regardless
     // of the account policy, because a test dials a real human's phone.
     const firstMessage = applyDisclosures(
       (params.firstMessage || '').trim() || 'This is a test call. Can you hear me?',
       { ...policy, aiDisclosureRequired: true },
+      null,
+      agent,
     );
     const assistant = provider.buildAssistant({
       firstMessage,
@@ -945,8 +981,9 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     getWebTestConfig,
     getVapiStatus,
     listTestCalls,
-    buildCallBriefFor: (userId: string, contactId: string, opts?: { objective?: string | null; callType?: string | null; note?: string | null }) =>
-      buildCallBrief(pool, { userId, contactId, ...opts }),
+    buildCallBriefFor: async (userId: string, contactId: string, opts?: { objective?: string | null; callType?: string | null; note?: string | null }) =>
+      buildCallBrief(pool, { userId, contactId, ...opts, agent: await loadOrgAgent() }),
+    getOrgAgent: loadOrgAgent,
     ensureLeadProfile,
     evaluateGate,
     queueCall,

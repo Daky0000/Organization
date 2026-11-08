@@ -20,6 +20,7 @@ import type { Pool } from 'pg';
 import { buildSharedAgentContext } from '../agentSharedContext.ts';
 import { OBJECTION_LABELS, isCallType, type CallType, type ObjectionCode } from './types.ts';
 import { getLeadSheetContext, renderLeadSheet } from './leadSheetContext.ts';
+import { fillTemplate, type OrgAgentConfig } from './orgAgent.ts';
 
 export interface CallBrief {
   /** The system prompt for the voice agent. */
@@ -93,6 +94,8 @@ export async function buildCallBrief(
     callType?: string | null;
     /** The user's own instructions for this call. */
     note?: string | null;
+    /** The organisation's agent (Admin → Sales Voice Agent): identity, knowledge, opening line. */
+    agent?: OrgAgentConfig | null;
   },
 ): Promise<CallBrief> {
   const { userId, contactId } = params;
@@ -143,8 +146,12 @@ export async function buildCallBrief(
   const stage = String(profile.stage || 'new');
 
   const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ').trim();
+  const agent = params.agent ?? null;
+  const businessName = agent?.businessName || params.businessName || null;
+  // The org's default objective is for first contacts; later stages keep their own.
+  const stageObjective = stage === 'new' && agent?.defaultObjective ? agent.defaultObjective : DEFAULT_OBJECTIVES[stage];
   const objective =
-    params.objective?.trim() || typeBrief.objective || DEFAULT_OBJECTIVES[stage] || DEFAULT_OBJECTIVES.new;
+    params.objective?.trim() || typeBrief.objective || stageObjective || DEFAULT_OBJECTIVES.new;
   const sheetText = sheet ? renderLeadSheet(sheet) : '';
 
   const playbookByCode = new Map<string, string>();
@@ -170,7 +177,14 @@ export async function buildCallBrief(
     (row.completed_at ? delivered : undelivered).push(String(row.title));
   }
 
-  const business = await buildSharedAgentContext(userId).catch(() => '');
+  const sharedContext = await buildSharedAgentContext(userId).catch(() => '');
+  const business = [agent?.knowledge?.trim(), sharedContext].filter(Boolean).join('\n\n');
+  const objectionGuide = agent?.objectionHandling?.trim() || '';
+  const extraRules = (agent?.extraRules || '')
+    .split('\n')
+    .map((l) => l.trim().replace(/^[-•]\s*/, ''))
+    .filter(Boolean)
+    .map((l) => `- ${l}`);
 
   const whoParts = [
     name || 'Name unknown',
@@ -188,7 +202,10 @@ export async function buildCallBrief(
     : 'No previous conversation on record. This is a first contact.';
 
   const systemPrompt = [
-    `You are a sales representative${params.businessName ? ` for ${params.businessName}` : ''} making a phone call. You are speaking out loud on a live call, so keep replies short and conversational — one or two sentences, then let them talk.`,
+    agent?.persona
+      ? fillTemplate(agent.persona, agent)
+      : `You are a sales representative${businessName ? ` for ${businessName}` : ''}.`,
+    'You are making a phone call and speaking out loud on a live call, so keep replies short and conversational — one or two sentences, then let them talk. Never read lists, links or symbols aloud; say web addresses simply, like "africon dot A I".',
     '',
     `CALL TYPE: ${typeBrief.label}`,
     typeBrief.guidance,
@@ -219,6 +236,7 @@ export async function buildCallBrief(
     '',
     business ? `ABOUT OUR BUSINESS\n${business}` : '',
     '',
+    objectionGuide ? `HANDLING COMMON OBJECTIONS\n${objectionGuide}\n` : '',
     'DO NOT',
     '- Pressure the lead or push after a clear no.',
     '- Re-ask anything already answered in "what happened last time".',
@@ -227,6 +245,7 @@ export async function buildCallBrief(
     '- Read the sheet row aloud like a list, or mention details that are not relevant to this call.',
     '- Quote an amount, date or meeting detail that is not written above.',
     '- Argue. If they object, acknowledge it and ask a question.',
+    ...extraRules,
     '',
     'HOW TO END',
     'If they give you new or corrected details (a new email, an amount paid, a date they will pay, whether they will attend), repeat them back to confirm. If they want a follow-up, ask for a specific day and time and repeat it back. If they ask not to be called again, acknowledge it warmly and end the call. Always thank them for their time.',
@@ -234,9 +253,12 @@ export async function buildCallBrief(
     .filter((line) => line !== '')
     .join('\n');
 
-  const firstMessage = name
-    ? `Hi ${String(contact.first_name || name).split(' ')[0]}, do you have a quick minute?`
-    : 'Hi, do you have a quick minute?';
+  const firstName = name ? String(contact.first_name || name).split(' ')[0] : '';
+  const firstMessage = agent
+    ? fillTemplate(firstName ? agent.firstMessage : agent.firstMessageNoName, agent, firstName)
+    : firstName
+      ? `Hi ${firstName}, do you have a quick minute?`
+      : 'Hi, do you have a quick minute?';
 
   return { systemPrompt, firstMessage, objective };
 }
@@ -249,13 +271,20 @@ export function applyDisclosures(
   firstMessage: string,
   policy: { aiDisclosureRequired: boolean; aiDisclosureText: string | null; recordingDisclosureRequired: boolean },
   businessName?: string | null,
+  agent?: OrgAgentConfig | null,
 ): string {
   const prefixes: string[] = [];
+  const name = agent?.businessName || businessName;
   if (policy.aiDisclosureRequired) {
+    const custom = policy.aiDisclosureText?.trim() || agent?.disclosureText?.trim();
     prefixes.push(
-      policy.aiDisclosureText?.trim() ||
-        `Hi, this is an AI assistant calling${businessName ? ` on behalf of ${businessName}` : ''}.`,
+      custom
+        ? (agent ? fillTemplate(custom, agent) : custom)
+        : `Hi, this is an AI assistant calling${name ? ` on behalf of ${name}` : ''}.`,
     );
+  } else if (agent?.greetingText?.trim()) {
+    // No AI disclosure, but the agent still says who it is and who it calls for.
+    prefixes.push(fillTemplate(agent.greetingText, agent));
   }
   if (policy.recordingDisclosureRequired) {
     prefixes.push('This call is being recorded.');

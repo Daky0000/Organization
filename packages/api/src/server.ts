@@ -48,6 +48,7 @@ import { registerCRMCompaniesRoutes } from './server/crmCompaniesRoutes.ts';
 import { registerCRMDealsRoutes } from './server/crmDealsRoutes.ts';
 import { registerCRMActivitiesRoutes } from './server/crmActivitiesRoutes.ts';
 import { registerSalesRoutes } from './server/salesRoutes.ts';
+import { registerSalesAgentRoutes } from './server/salesAgentRoutes.ts';
 import { registerSalesLeadsRoutes } from './server/salesLeadsRoutes.ts';
 import { processPendingActivityReads } from './server/sales/leadActivities.ts';
 import { runLeadDigests, runLeadReminders } from './server/sales/leadReminders.ts';
@@ -947,6 +948,8 @@ app.get('/api/autopilot/ops/diagnostics', async (req: Request, res: Response) =>
 // Lead workspace first: its literal paths must win over /leads/:contactId.
 app.use('/api/sales', registerSalesLeadsRoutes({ requireAuth, pool: pool! }));
 app.use('/api/sales', registerSalesRoutes({ requireAuth, pool: pool!, salesEngine }));
+// Org-wide voice agent (identity, knowledge, provider) — admin only.
+app.use('/api', registerSalesAgentRoutes({ requireAdmin, hasDatabase, pool, salesEngine }));
 
 // ─── Connector Abstraction Layer ──────────────────────────────────────────────
 app.use('/api/connectors', registerConnectorRegistryRoutes({ requireAuth, pool: pool! }));

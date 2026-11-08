@@ -165,11 +165,11 @@ export default function SalesSettings() {
           </label>
 
           {policy.aiDisclosureRequired && (
-            <Field label="Disclosure wording" hint="Leave blank for the default.">
+            <Field label="Disclosure wording" hint="Leave blank to use the organisation's opening from Admin → Sales Voice Agent.">
               <input
                 value={policy.aiDisclosureText ?? ''}
                 onChange={(e) => set('aiDisclosureText', e.target.value || null)}
-                placeholder="Hi, this is an AI assistant calling on behalf of …"
+                placeholder="Hello, this is Ama, an AI assistant calling from Africon…"
                 className={inputClass}
               />
             </Field>
@@ -258,32 +258,15 @@ export default function SalesSettings() {
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-sm font-bold text-slate-900">Voice provider</h2>
+        <h2 className="text-sm font-bold text-slate-900">Voice agent</h2>
         <p className="mt-1 text-xs text-slate-500">
-          The simulator runs the whole loop without dialing or spending anything — use it to check the flow first.
-          Vapi credentials are configured by an admin under Integrations.
+          The AI caller — its name, opening line, company knowledge, voice, provider and phone number — is set once for
+          the whole organisation by an admin under Admin → Sales Voice Agent.
         </p>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Provider">
-            <select value={policy.provider} onChange={(e) => set('provider', e.target.value)} className={inputClass}>
-              <option value="simulator">Simulator (no real calls)</option>
-              <option value="vapi">Vapi</option>
-            </select>
-          </Field>
-          <Field label="Caller ID"><input value={policy.fromNumber ?? ''} onChange={(e) => set('fromNumber', e.target.value || null)} placeholder="+233…" className={inputClass} /></Field>
-          <Field label="Voice ID" hint="ElevenLabs voice.">
-            <input value={policy.voiceId ?? ''} onChange={(e) => set('voiceId', e.target.value || null)} className={inputClass} />
-          </Field>
-          <Field label="Max call length (sec)">
-            <input type="number" min={60} value={policy.maxCallDurationSec} onChange={(e) => set('maxCallDurationSec', Number(e.target.value))} className={inputClass} />
-          </Field>
-        </div>
-        {policy.provider === 'vapi' && (
-          <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            Vapi bills per minute on top of the AI credits used to analyse each transcript. Telephony minutes are not
-            metered by the credit system, so watch your Vapi dashboard directly.
-          </p>
-        )}
+        <p className="mt-3 text-xs text-slate-600">
+          Now using: <span className="font-semibold">{policy.provider === 'vapi' ? 'Vapi (real calls)' : 'Simulator (no real calls)'}</span>
+          {' · '}max {Math.round(policy.maxCallDurationSec / 60)} min per call
+        </p>
       </section>
 
       <div className="flex items-center gap-3">
