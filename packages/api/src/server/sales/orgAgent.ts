@@ -75,6 +75,8 @@ export interface OrgAgentConfig {
   defaultCountry: string;
   /** Test calls (actually placed) allowed per hour, per user. */
   testCallsPerHour: number;
+  /** Numbers offered as one-click picks in the test console. */
+  testNumbers: string[];
 }
 
 const AFRICON_KNOWLEDGE = `WHO WE ARE
@@ -170,6 +172,8 @@ export const AFRICON_DEFAULT_AGENT: OrgAgentConfig = {
   silenceTimeoutSec: 30,
   defaultCountry: 'GH',
   testCallsPerHour: 20,
+  // Kept out of source: personal numbers are entered in Admin → Sales Voice Agent.
+  testNumbers: [],
 };
 
 /** OpenAI models Vapi accepts (from Vapi's own validation error, 2026-11-08). */
@@ -217,7 +221,7 @@ export interface PhoneInfo {
 /**
  * Work out what a number is, for any country. A number with a country code —
  * "+228…", "00228…", or "228…" without the plus — is detected from that code.
- * A local number ("0545950611") is read in `localCountry`: the lead's own
+ * A local number ("0244123456") is read in `localCountry`: the lead's own
  * country when known, else the organisation default (Ghana for Africon).
  */
 export function describePhone(raw: string | null | undefined, localCountry: CountryCode = 'GH'): PhoneInfo {
@@ -285,6 +289,8 @@ export function resolveOrgAgent(stored: Record<string, unknown> | null | undefin
     out.voiceProvider = AFRICON_DEFAULT_AGENT.voiceProvider;
     out.voiceId = AFRICON_DEFAULT_AGENT.voiceId;
   }
+  const testNumbers = parseNumberList(s.testNumbers);
+  if (testNumbers) out.testNumbers = testNumbers;
   const playbook = parsePlaybook(s.playbook);
   if (playbook) out.playbook = playbook;
   const num = (v: unknown, min: number, max: number, fallback: number) => {
@@ -371,4 +377,20 @@ export async function getOrgAgent(
 ): Promise<OrgAgentConfig> {
   const stored = await getPlatformConfig(SALES_AGENT_PLATFORM).catch(() => ({}));
   return resolveOrgAgent(stored);
+}
+
+/** A list of numbers: an array, a JSON array string, or one per line / comma-separated. */
+export function parseNumberList(raw: unknown): string[] | null {
+  let list: unknown = raw;
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (t.startsWith('[')) {
+      try { list = JSON.parse(t); } catch { return null; }
+    } else {
+      list = t.split(/[\n,;]+/);
+    }
+  }
+  if (!Array.isArray(list)) return null;
+  const clean = list.map((n) => String(n ?? '').trim().slice(0, 30)).filter(Boolean);
+  return [...new Set(clean)].slice(0, 20);
 }

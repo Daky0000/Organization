@@ -18,6 +18,7 @@ type AgentConfig = {
   provider: 'vapi' | 'simulator'; voiceProvider: string; voiceId: string;
   modelProvider: string; model: string; temperature: number;
   maxCallDurationSec: number; silenceTimeoutSec: number; defaultCountry: string; testCallsPerHour: number;
+  testNumbers: string[];
 };
 type View = {
   success: boolean; error?: string; config: AgentConfig; defaults: AgentConfig; customised: boolean;
@@ -269,6 +270,12 @@ export default function AdminSalesAgent() {
             {COUNTRY_CHOICES.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
           </select>
         </Field>
+        <Field label="Test numbers" hint="One per line. Shown as one-click picks in the test console below. Saved with the voice agent.">
+          <textarea rows={3} value={draft.testNumbers.join('\n')}
+            onChange={(e) => set('testNumbers', e.target.value.split('\n').map((n) => n.trim()).filter((n, i, all) => n || i === all.length - 1))}
+            placeholder={'0201234567\n+228 90 12 34 56'}
+            className={`${inputCls} font-mono text-xs`} />
+        </Field>
         <p className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
           Calling abroad from a Twilio number: turn on each destination country in Twilio Console → Voice → Settings → Geo permissions,
           or calls there are blocked. Trial Twilio accounts can only call verified numbers.
@@ -387,7 +394,7 @@ export default function AdminSalesAgent() {
 
       {actions}
 
-      <VapiTestConsole leads={leads} />
+      <VapiTestConsole leads={leads} testNumbers={view.config.testNumbers} />
     </div>
   );
 }

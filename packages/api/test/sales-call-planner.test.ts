@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectCallPurpose, resolveLeadPhone } from '../src/server/sales/callPlanner.ts';
 import type { SheetColumn } from '../src/server/sales/leadSheetContext.ts';
+
+// config.ts validates env at import time and the sales modules transitively
+// import the logger, so env must be set before the dynamic import.
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET ??= 'x'.repeat(32);
+process.env.INTEGRATIONS_ENCRYPTION_KEY ??= 'y'.repeat(32);
+process.env.WORDPRESS_ENCRYPTION_KEY ??= 'z'.repeat(32);
+
+const { detectCallPurpose, resolveLeadPhone } = await import('../src/server/sales/callPlanner.ts');
 
 const col = (label: string, value: unknown, type: SheetColumn['type'] = 'text'): SheetColumn =>
   ({ key: label.toLowerCase(), label, type, options: null, value });
@@ -50,9 +58,9 @@ test('without a reason, the lead data decides', () => {
 // ─── Number ─────────────────────────────────────────────────────────────────
 
 test('the contact phone is used and described', () => {
-  const r = resolveLeadPhone({ contactPhone: '0545950611', localCountry: 'GH' });
+  const r = resolveLeadPhone({ contactPhone: '0244123456', localCountry: 'GH' });
   assert.equal(r.callable, true);
-  assert.equal(r.phone?.e164, '+233545950611');
+  assert.equal(r.phone?.e164, '+233244123456');
   assert.equal(r.phone?.country, 'GH');
   assert.equal(r.source, 'Phone');
   assert.equal(r.warning, null);

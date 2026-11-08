@@ -1,8 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AFRICON_DEFAULT_AGENT, fillTemplate, resolveOrgAgent } from '../src/server/sales/orgAgent.ts';
-import { applyDisclosures } from '../src/server/sales/callBrief.ts';
-import { VapiProvider } from '../src/server/sales/providers/vapi.ts';
+
+// config.ts validates env at import time and these modules transitively
+// import the logger, so env must be set before the dynamic imports.
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET ??= 'x'.repeat(32);
+process.env.INTEGRATIONS_ENCRYPTION_KEY ??= 'y'.repeat(32);
+process.env.WORDPRESS_ENCRYPTION_KEY ??= 'z'.repeat(32);
+
+const { AFRICON_DEFAULT_AGENT, fillTemplate, resolveOrgAgent } = await import('../src/server/sales/orgAgent.ts');
+const { applyDisclosures } = await import('../src/server/sales/callBrief.ts');
+const { VapiProvider } = await import('../src/server/sales/providers/vapi.ts');
 
 const policy = { aiDisclosureRequired: true, aiDisclosureText: null, recordingDisclosureRequired: true };
 
@@ -85,10 +93,10 @@ test('the assistant posts reports to our webhook with the shared secret', () => 
 
 test('local Ghana numbers become E.164', async () => {
   const { toE164 } = await import('../src/server/sales/orgAgent.ts');
-  assert.equal(toE164('0545950611'), '+233545950611');
-  assert.equal(toE164('054 595 0611'), '+233545950611');
-  assert.equal(toE164('+233545950611'), '+233545950611');
-  assert.equal(toE164('233545950611'), '+233545950611');
+  assert.equal(toE164('0244123456'), '+233244123456');
+  assert.equal(toE164('024 412 3456'), '+233244123456');
+  assert.equal(toE164('+233244123456'), '+233244123456');
+  assert.equal(toE164('233244123456'), '+233244123456');
   assert.equal(toE164('00447911123456'), '+447911123456');
   assert.equal(toE164('12'), null);
 });
@@ -103,7 +111,7 @@ test('international numbers written without + are not given +233', async () => {
   const { toE164 } = await import('../src/server/sales/orgAgent.ts');
   assert.equal(toE164('14155550123'), '+14155550123');
   assert.equal(toE164('+1 (415) 555-0123'), '+14155550123');
-  assert.equal(toE164('545950611'), '+233545950611');
+  assert.equal(toE164('244123456'), '+233244123456');
 });
 
 test('numbers from any country are detected, local ones read in the given country', async () => {
@@ -114,11 +122,19 @@ test('numbers from any country are detected, local ones read in the given countr
   assert.equal(describePhone('22890123456').country, 'TG'); // no "+"
   assert.equal(describePhone('0803 123 4567', 'NG').e164, '+2348031234567');
   assert.equal(describePhone('+33 6 12 34 56 78').country, 'FR');
-  assert.equal(describePhone('0545950611').country, 'GH');
-  assert.equal(describePhone('0545950611').type, 'MOBILE');
+  assert.equal(describePhone('0244123456').country, 'GH');
+  assert.equal(describePhone('0244123456').type, 'MOBILE');
   assert.equal(describePhone('not a number').valid, false);
   assert.equal(toCountryCode('Togo'), 'TG');
   assert.equal(toCountryCode("Côte d'Ivoire"), 'CI');
   assert.equal(toCountryCode('bj'), 'BJ');
   assert.equal(toCountryCode('Narnia'), null);
+});
+
+test('test numbers default, and parse from a list or lines', async () => {
+  const { parseNumberList } = await import('../src/server/sales/orgAgent.ts');
+  assert.deepEqual(resolveOrgAgent({}).testNumbers, []);
+  assert.deepEqual(resolveOrgAgent({ testNumbers: '["0201234567"," 0244 123 456 "]' }).testNumbers, ['0201234567', '0244 123 456']);
+  assert.deepEqual(parseNumberList('0201234567\n\n0501234567, 0201234567'), ['0201234567', '0501234567']);
+  assert.deepEqual(resolveOrgAgent({ testNumbers: '[]' }).testNumbers, []);
 });

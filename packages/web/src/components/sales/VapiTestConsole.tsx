@@ -84,7 +84,11 @@ type VapiClient = {
   removeAllListeners?: () => void;
 };
 
-export default function VapiTestConsole({ leads = [] }: { leads?: SalesLead[] }) {
+export default function VapiTestConsole({ leads = [], testNumbers = [] }: {
+  leads?: SalesLead[];
+  /** Saved test numbers (Admin → Sales Voice Agent), offered as one-click picks. */
+  testNumbers?: string[];
+}) {
   const [status, setStatus] = useState<VapiStatus | null>(null);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -425,10 +429,28 @@ export default function VapiTestConsole({ leads = [] }: { leads?: SalesLead[] })
             <input
               value={toNumber}
               onChange={(e) => setToNumber(e.target.value)}
-              placeholder="+228 90 12 34 56 or 0545950611"
+              placeholder="+228 90 12 34 56 or 0244123456"
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
             />
           </div>
+          {testNumbers.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-slate-500">Test numbers:</span>
+              {testNumbers.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setToNumber(n)}
+                  aria-pressed={toNumber.trim() === n}
+                  className={`rounded-lg border px-2 py-1 font-mono text-xs ${
+                    toNumber.trim() === n ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          )}
           <p className="mt-1 text-xs text-slate-500">
             Any country. With a country code (+228, +229, +44…) it is detected; a number starting with 0 is read in the country on the left.
           </p>
