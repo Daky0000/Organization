@@ -64,3 +64,21 @@ test('the inbound brief carries the Africon knowledge and an incoming-call scrip
   assert.match(prompt, /Never mention an event whose date has already passed/);
   assert.doesNotMatch(prompt, /\{agentName\}|\{businessName\}/);
 });
+
+test('earlier defaults Vapi rejected are replaced on read', () => {
+  const agent = resolveOrgAgent({ modelProvider: 'anthropic', model: 'claude-haiku-4-5', voiceProvider: '11labs', voiceId: 'EXAVITQu4vr4xnAyMBLR' });
+  assert.equal(agent.model, AFRICON_DEFAULT_AGENT.model);
+  assert.equal(agent.modelProvider, AFRICON_DEFAULT_AGENT.modelProvider);
+  assert.equal(agent.voiceProvider, 'vapi');
+  assert.equal(agent.voiceId, AFRICON_DEFAULT_AGENT.voiceId);
+});
+
+test('the assistant posts reports to our webhook with the shared secret', () => {
+  const provider = new VapiProvider(
+    { apiKey: 'k', publicKey: null, phoneNumberId: 'p', webhookSecret: 's' },
+    { serverUrl: 'https://example.com/webhooks/vapi', serverSecret: 'sekret' },
+  );
+  const a = provider.buildAssistant({ firstMessage: 'Hi', systemPrompt: 'x', voiceId: null, maxDurationSec: 60, recordingEnabled: true }) as any;
+  assert.equal(a.server.url, 'https://example.com/webhooks/vapi');
+  assert.equal(a.server.headers['x-vapi-secret'], 'sekret');
+});

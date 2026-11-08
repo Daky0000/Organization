@@ -90,6 +90,13 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
 
   const loadOrgAgent = () => getOrgAgent(getPlatformConfig);
 
+  /** Public URL of our Vapi webhook, or null when the app URL is unknown (local dev). */
+  function publicWebhookUrl(): string | null {
+    const base = (process.env.PUBLIC_API_URL || process.env.VITE_APP_URL || '').replace(/\/$/, '');
+    if (!/^https:\/\//.test(base)) return null;
+    return `${base}/webhooks/vapi`;
+  }
+
   async function buildVapiProvider(agent?: OrgAgentConfig): Promise<VapiProvider> {
     const [cfg, org] = await Promise.all([
       getPlatformConfig('vapi').catch(() => ({}) as Record<string, string>),
@@ -113,6 +120,9 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
         silenceTimeoutSec: org.silenceTimeoutSec,
         endCallMessage: fillTemplate(org.endCallMessage, org),
         voicemailMessage: fillTemplate(org.voicemailMessage, org),
+        // Reports come back to us without anyone setting a Server URL in Vapi.
+        serverUrl: publicWebhookUrl(),
+        serverSecret: cfg.webhookSecret || process.env.VAPI_WEBHOOK_SECRET || null,
       },
     );
   }

@@ -9,6 +9,7 @@
 // where the provider reads it.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { randomBytes } from 'crypto';
 import express from 'express';
 import type { Response, Router } from 'express';
 import type { Request } from '../types/http.ts';
@@ -55,10 +56,17 @@ export function registerSalesAgentRoutes({ requireAdmin, hasDatabase, pool, sale
    */
   async function syncInbound(): Promise<SyncResult> {
     try {
-      const [agent, vapi] = await Promise.all([salesEngine.getOrgAgent(), readRow('vapi')]);
+      const [agent, stored] = await Promise.all([salesEngine.getOrgAgent(), readRow('vapi')]);
+      let vapi = stored;
       const phoneNumberId = vapi.phoneNumberId || process.env.VAPI_PHONE_NUMBER_ID || '';
       if (!(vapi.apiKey || vapi.privateKey || process.env.VAPI_API_KEY)) return { ok: false, skipped: 'No Vapi private key yet' };
       if (!phoneNumberId) return { ok: false, skipped: 'No phone number chosen yet' };
+      // Vapi never issues a webhook secret — it is whatever we send. Make one
+      // so call reports are verified without anyone pasting a secret around.
+      if (!vapi.webhookSecret && !process.env.VAPI_WEBHOOK_SECRET) {
+        vapi = { ...vapi, webhookSecret: randomBytes(24).toString('hex') };
+        await writeRow('vapi', vapi);
+      }
       const provider = await salesEngine.buildVapiProvider(agent);
       const assistant = provider.buildAssistant({
         firstMessage: fillTemplate(agent.inboundFirstMessage, agent),

@@ -42,14 +42,19 @@ const VOICE_PROVIDERS = [
   { id: 'playht', label: 'PlayHT' },
   { id: 'deepgram', label: 'Deepgram' },
 ];
-const MODEL_PROVIDERS = ['anthropic', 'openai', 'google', 'groq'];
-// ElevenLabs premade voices, available on every Vapi account.
+const MODEL_PROVIDERS = ['openai', 'anthropic', 'google', 'groq'];
+// Models Vapi accepts for OpenAI, fastest first. Other providers: type the model name.
+const OPENAI_MODELS = ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o-mini', 'gpt-4o', 'gpt-5-mini', 'gpt-5.4-mini', 'gpt-5.4', 'gpt-5.5'];
+// Vapi built-in voices: no third-party voice credential needed.
 const VOICE_PRESETS = [
-  { provider: '11labs', id: 'EXAVITQu4vr4xnAyMBLR', label: 'Sarah — warm, professional (female)' },
-  { provider: '11labs', id: '21m00Tcm4TlvDq8ikWAM', label: 'Rachel — calm, clear (female)' },
-  { provider: '11labs', id: 'XrExE9yKIg1WjnnlVkGX', label: 'Matilda — friendly (female)' },
-  { provider: '11labs', id: 'pNInz6obpgDQGcFmaJgB', label: 'Adam — deep, confident (male)' },
-  { provider: '11labs', id: 'TxGEqnHWrfWFTfGW9XjX', label: 'Josh — young, upbeat (male)' },
+  { provider: 'vapi', id: 'Savannah', label: 'Savannah — warm, friendly (female)' },
+  { provider: 'vapi', id: 'Paige', label: 'Paige — calm, professional (female)' },
+  { provider: 'vapi', id: 'Kylie', label: 'Kylie — bright, upbeat (female)' },
+  { provider: 'vapi', id: 'Lily', label: 'Lily — soft, clear (female)' },
+  { provider: 'vapi', id: 'Hana', label: 'Hana — gentle (female)' },
+  { provider: 'vapi', id: 'Elliot', label: 'Elliot — confident (male)' },
+  { provider: 'vapi', id: 'Cole', label: 'Cole — deep, steady (male)' },
+  { provider: 'vapi', id: 'Rohan', label: 'Rohan — energetic (male)' },
 ];
 
 function fill(text: string, c: AgentConfig, firstName: string) {
@@ -192,11 +197,11 @@ export default function AdminSalesAgent() {
       </div>
 
       <Card title="Vapi connection" icon={<Phone size={16} className="text-slate-500" />}
-        note="Keys live in Admin → Integrations → Vapi. The phone number is picked here, using those keys.">
+        note="Keys live in Admin → Integrations → Vapi. The phone number is picked here, using those keys. The webhook URL and secret are set on the assistant automatically — nothing to paste into Vapi.">
         <div className="flex flex-wrap gap-4">
           <StatusLine ok={view.vapi.hasPrivateKey} label="Private key" />
           <StatusLine ok={view.vapi.hasPublicKey} label="Public key (browser tests)" />
-          <StatusLine ok={view.vapi.hasWebhookSecret} label="Webhook secret" />
+          <StatusLine ok={view.vapi.hasWebhookSecret} label={view.vapi.hasWebhookSecret ? 'Webhook secret' : 'Webhook secret — created automatically when you save'} />
           {vapi && <StatusLine ok={vapi.ok} label={vapi.ok ? 'Vapi accepted the key' : (vapi.error ?? 'Vapi check failed')} />}
           <StatusLine ok={Boolean(view.vapi.inboundAssistantId)} label={view.vapi.inboundAssistantId ? 'Answers incoming calls' : 'Not answering incoming calls yet — save to sync'} />
         </div>
@@ -263,11 +268,18 @@ export default function AdminSalesAgent() {
             {text('voiceId')}
           </Field>
           <Field label="Conversation model provider">
-            <select value={draft.modelProvider} onChange={(e) => set('modelProvider', e.target.value)} className={inputCls}>
+            <select value={draft.modelProvider} onChange={(e) => setDraft({ ...draft, modelProvider: e.target.value, model: e.target.value === 'openai' ? OPENAI_MODELS[0] : '' })} className={inputCls}>
               {MODEL_PROVIDERS.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </Field>
-          <Field label="Model" hint="A fast model keeps replies quick on a live call.">{text('model')}</Field>
+          <Field label="Model" hint="A fast model keeps replies quick on a live call.">
+            {draft.modelProvider === 'openai' ? (
+              <select value={draft.model} onChange={(e) => set('model', e.target.value)} className={inputCls}>
+                {!OPENAI_MODELS.includes(draft.model) && <option value={draft.model}>{draft.model}</option>}
+                {OPENAI_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            ) : text('model')}
+          </Field>
           <Field label="Temperature" hint="Lower = more consistent; 0.3–0.5 suits sales calls.">
             <input type="number" min={0} max={1} step={0.1} value={draft.temperature} onChange={(e) => set('temperature', Number(e.target.value))} className={inputCls} />
           </Field>

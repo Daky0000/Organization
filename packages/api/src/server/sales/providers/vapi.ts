@@ -80,6 +80,10 @@ export interface VapiAgentOptions {
   silenceTimeoutSec?: number | null;
   endCallMessage?: string | null;
   voicemailMessage?: string | null;
+  /** Where Vapi posts status and end-of-call reports for this assistant. */
+  serverUrl?: string | null;
+  /** Sent as the x-vapi-secret header, checked by verifySignature. */
+  serverSecret?: string | null;
 }
 
 export class VapiProvider implements CallProvider {
@@ -105,8 +109,8 @@ export class VapiProvider implements CallProvider {
     agent: VapiAgentOptions | null = this.agentDefaults,
   ): Record<string, unknown> {
     const model: Record<string, unknown> = {
-      provider: agent?.modelProvider || 'anthropic',
-      model: agent?.model || 'claude-haiku-4-5',
+      provider: agent?.modelProvider || 'openai',
+      model: agent?.model || 'gpt-4.1-mini',
       messages: [{ role: 'system', content: req.systemPrompt }],
     };
     if (typeof agent?.temperature === 'number') model.temperature = agent.temperature;
@@ -125,6 +129,12 @@ export class VapiProvider implements CallProvider {
     if (agent?.name) assistant.name = agent.name.slice(0, 40);
     if (agent?.endCallMessage) assistant.endCallMessage = agent.endCallMessage;
     if (agent?.voicemailMessage) assistant.voicemailMessage = agent.voicemailMessage;
+    if (agent?.serverUrl) {
+      assistant.server = {
+        url: agent.serverUrl,
+        ...(agent.serverSecret ? { headers: { 'x-vapi-secret': agent.serverSecret } } : {}),
+      };
+    }
     if (req.voiceId) {
       assistant.voice = { provider: agent?.voiceProvider || '11labs', voiceId: req.voiceId };
     }

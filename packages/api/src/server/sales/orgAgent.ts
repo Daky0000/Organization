@@ -152,11 +152,13 @@ export const AFRICON_DEFAULT_AGENT: OrgAgentConfig = {
   voicemailMessage: 'Hello, this is {agentName} from {businessName}, Africa AI Consult. We help teams in Ghana and across Africa put AI to work. We would love to offer you a free 30-minute AI readiness consultation. Please call us on +233 24 742 9359 or visit africon.ai. Thank you!',
 
   provider: 'vapi',
-  // ElevenLabs "Sarah" — a premade voice every Vapi account can use: warm, clear, professional.
-  voiceProvider: '11labs',
-  voiceId: 'EXAVITQu4vr4xnAyMBLR',
-  modelProvider: 'anthropic',
-  model: 'claude-haiku-4-5',
+  // A Vapi built-in voice: works on every Vapi account with no third-party
+  // voice credential. (Vapi rejects ElevenLabs library IDs without one.)
+  voiceProvider: 'vapi',
+  voiceId: 'Savannah',
+  // Fast and on Vapi's accepted model list — latency matters on a live call.
+  modelProvider: 'openai',
+  model: 'gpt-4.1-mini',
   temperature: 0.4,
   maxCallDurationSec: 420,
   silenceTimeoutSec: 30,
@@ -185,6 +187,15 @@ export function resolveOrgAgent(stored: Record<string, unknown> | null | undefin
     if (v.trim() || blankAllowed) (out as any)[key] = v.slice(0, LIMITS[key] ?? 2_000);
   }
   if (s.provider === 'vapi' || s.provider === 'simulator') out.provider = s.provider;
+  // Earlier defaults Vapi rejects: a saved copy of them means "use the default".
+  if (out.model === 'claude-haiku-4-5') {
+    out.modelProvider = AFRICON_DEFAULT_AGENT.modelProvider;
+    out.model = AFRICON_DEFAULT_AGENT.model;
+  }
+  if (out.voiceId === 'EXAVITQu4vr4xnAyMBLR') {
+    out.voiceProvider = AFRICON_DEFAULT_AGENT.voiceProvider;
+    out.voiceId = AFRICON_DEFAULT_AGENT.voiceId;
+  }
   const playbook = parsePlaybook(s.playbook);
   if (playbook) out.playbook = playbook;
   const num = (v: unknown, min: number, max: number, fallback: number) => {
