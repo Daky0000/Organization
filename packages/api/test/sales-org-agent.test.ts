@@ -55,3 +55,12 @@ test('org voice, model and voicemail settings reach the Vapi assistant', () => {
   assert.equal(a.voicemailMessage, 'Call us back');
   assert.equal(a.silenceTimeoutSeconds, 20);
 });
+
+test('the inbound brief carries the Africon knowledge and an incoming-call script', async () => {
+  const { buildInboundSystemPrompt } = await import('../src/server/sales/orgAgent.ts');
+  const prompt = buildInboundSystemPrompt(AFRICON_DEFAULT_AGENT);
+  assert.match(prompt, /CALL TYPE: Incoming call/);
+  assert.match(prompt, /Africa AI Consult Ltd/);
+  assert.match(prompt, /Never mention an event whose date has already passed/);
+  assert.doesNotMatch(prompt, /\{agentName\}|\{businessName\}/);
+});

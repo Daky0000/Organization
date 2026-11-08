@@ -118,6 +118,10 @@ export class VapiProvider implements CallProvider {
       silenceTimeoutSeconds: agent?.silenceTimeoutSec || 30,
       recordingEnabled: req.recordingEnabled,
     };
+    if (agent) {
+      // Lets the agent hang up after the goodbye instead of waiting for silence.
+      assistant.endCallFunctionEnabled = true;
+    }
     if (agent?.name) assistant.name = agent.name.slice(0, 40);
     if (agent?.endCallMessage) assistant.endCallMessage = agent.endCallMessage;
     if (agent?.voicemailMessage) assistant.voicemailMessage = agent.voicemailMessage;
@@ -165,6 +169,53 @@ export class VapiProvider implements CallProvider {
       }
       return { ...base, ok: false, error: `Could not reach Vapi: ${detail || 'unknown error'}` };
     }
+  }
+
+  /**
+   * Create or update the stored assistant that answers incoming calls, and
+   * attach it to the phone number — so ringing the number reaches the agent.
+   * Returns the assistant id to remember for the next sync.
+   */
+  async syncInboundAssistant(params: {
+    assistantId: string | null;
+    assistant: Record<string, unknown>;
+    phoneNumberId: string;
+  }): Promise<{ assistantId: string }> {
+    if (!this.cfg.apiKey) throw new Error('No Vapi private key configured');
+    const headers = { Authorization: `Bearer ${this.cfg.apiKey}`, 'Content-Type': 'application/json' };
+    const detail = (err: any) => {
+      const m = err?.response?.data?.message;
+      return Array.isArray(m) ? m.join('; ') : m || err?.response?.data?.error || err?.message || 'unknown error';
+    };
+
+    let assistantId = params.assistantId;
+    try {
+      if (assistantId) {
+        try {
+          await axios.patch(`${VAPI_API}/assistant/${assistantId}`, params.assistant, { headers, timeout: 20_000 });
+        } catch (err: any) {
+          // Deleted in the Vapi dashboard: make a fresh one.
+          if (err?.response?.status !== 404) throw err;
+          assistantId = null;
+        }
+      }
+      if (!assistantId) {
+        const { data } = await axios.post(`${VAPI_API}/assistant`, params.assistant, { headers, timeout: 20_000 });
+        assistantId = String(data?.id ?? '');
+        if (!assistantId) throw new Error('Vapi created the assistant but returned no id');
+      }
+    } catch (err: any) {
+      logger.error({ status: err?.response?.status, detail: detail(err) }, 'vapi_assistant_sync_failed');
+      throw new Error(`Vapi rejected the assistant: ${detail(err)}`);
+    }
+
+    try {
+      await axios.patch(`${VAPI_API}/phone-number/${params.phoneNumberId}`, { assistantId }, { headers, timeout: 20_000 });
+    } catch (err: any) {
+      logger.error({ status: err?.response?.status, detail: detail(err) }, 'vapi_phone_assign_failed');
+      throw new Error(`Vapi would not attach the assistant to the phone number: ${detail(err)}`);
+    }
+    return { assistantId };
   }
 
   /** The browser-safe key, for the Web SDK. Never returns the private key. */

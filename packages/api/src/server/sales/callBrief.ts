@@ -20,7 +20,7 @@ import type { Pool } from 'pg';
 import { buildSharedAgentContext } from '../agentSharedContext.ts';
 import { OBJECTION_LABELS, isCallType, type CallType, type ObjectionCode } from './types.ts';
 import { getLeadSheetContext, renderLeadSheet } from './leadSheetContext.ts';
-import { fillTemplate, type OrgAgentConfig } from './orgAgent.ts';
+import { fillTemplate, renderPlaybook, type OrgAgentConfig } from './orgAgent.ts';
 
 export interface CallBrief {
   /** The system prompt for the voice agent. */
@@ -154,7 +154,12 @@ export async function buildCallBrief(
     params.objective?.trim() || typeBrief.objective || stageObjective || DEFAULT_OBJECTIVES.new;
   const sheetText = sheet ? renderLeadSheet(sheet) : '';
 
+  // The org playbook (Admin → Sales Voice Agent) answers first; responses the
+  // Insight agent learned into sales_playbooks fill any code it does not cover.
   const playbookByCode = new Map<string, string>();
+  for (const e of agent?.playbook ?? []) {
+    if (e.code !== 'other' && !playbookByCode.has(e.code)) playbookByCode.set(e.code, e.response);
+  }
   for (const row of playbookRes.rows) {
     if (row.objection_code && !playbookByCode.has(row.objection_code)) {
       playbookByCode.set(String(row.objection_code), String(row.content));
@@ -179,7 +184,7 @@ export async function buildCallBrief(
 
   const sharedContext = await buildSharedAgentContext(userId).catch(() => '');
   const business = [agent?.knowledge?.trim(), sharedContext].filter(Boolean).join('\n\n');
-  const objectionGuide = agent?.objectionHandling?.trim() || '';
+  const objectionGuide = agent ? renderPlaybook(agent, OBJECTION_LABELS) : '';
   const extraRules = (agent?.extraRules || '')
     .split('\n')
     .map((l) => l.trim().replace(/^[-•]\s*/, ''))
@@ -236,7 +241,7 @@ export async function buildCallBrief(
     '',
     business ? `ABOUT OUR BUSINESS\n${business}` : '',
     '',
-    objectionGuide ? `HANDLING COMMON OBJECTIONS\n${objectionGuide}\n` : '',
+    objectionGuide ? `OBJECTION PLAYBOOK — how to handle what people say\n${objectionGuide}\n` : '',
     'DO NOT',
     '- Pressure the lead or push after a clear no.',
     '- Re-ask anything already answered in "what happened last time".',

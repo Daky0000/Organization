@@ -16,7 +16,9 @@ import type { Pool } from 'pg';
 import { logger } from '../logger.ts';
 import { recordAuditLog } from '../link-metadata.ts';
 import { decryptPlatformConfig, encryptPlatformConfig } from '../integration-helpers.ts';
-import { AFRICON_DEFAULT_AGENT, SALES_AGENT_PLATFORM, resolveOrgAgent } from './sales/orgAgent.ts';
+import {
+  AFRICON_DEFAULT_AGENT, SALES_AGENT_PLATFORM, buildInboundSystemPrompt, fillTemplate, resolveOrgAgent,
+} from './sales/orgAgent.ts';
 import type { SalesEngine } from './sales/salesEngine.ts';
 
 interface Deps {
@@ -45,7 +47,39 @@ export function registerSalesAgentRoutes({ requireAdmin, hasDatabase, pool, sale
     );
   }
 
-  async function view() {
+  type SyncResult = { ok: boolean; skipped?: string; error?: string; assistantId?: string };
+
+  /**
+   * Push the agent to Vapi as the assistant that answers the phone number, so
+   * calling the number reaches it. Runs after every save; never throws.
+   */
+  async function syncInbound(): Promise<SyncResult> {
+    try {
+      const [agent, vapi] = await Promise.all([salesEngine.getOrgAgent(), readRow('vapi')]);
+      const phoneNumberId = vapi.phoneNumberId || process.env.VAPI_PHONE_NUMBER_ID || '';
+      if (!(vapi.apiKey || vapi.privateKey || process.env.VAPI_API_KEY)) return { ok: false, skipped: 'No Vapi private key yet' };
+      if (!phoneNumberId) return { ok: false, skipped: 'No phone number chosen yet' };
+      const provider = await salesEngine.buildVapiProvider(agent);
+      const assistant = provider.buildAssistant({
+        firstMessage: fillTemplate(agent.inboundFirstMessage, agent),
+        systemPrompt: buildInboundSystemPrompt(agent),
+        voiceId: agent.voiceId || null,
+        maxDurationSec: agent.maxCallDurationSec,
+        recordingEnabled: true,
+      });
+      const { assistantId } = await provider.syncInboundAssistant({
+        assistantId: vapi.inboundAssistantId || null,
+        assistant,
+        phoneNumberId,
+      });
+      if (assistantId !== vapi.inboundAssistantId) await writeRow('vapi', { ...vapi, inboundAssistantId: assistantId });
+      return { ok: true, assistantId };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Vapi sync failed' };
+    }
+  }
+
+  async function view(sync?: SyncResult) {
     const [stored, vapi] = await Promise.all([readRow(SALES_AGENT_PLATFORM), readRow('vapi')]);
     return {
       success: true,
@@ -57,7 +91,9 @@ export function registerSalesAgentRoutes({ requireAdmin, hasDatabase, pool, sale
         hasPublicKey: Boolean(vapi.publicKey || process.env.VAPI_PUBLIC_KEY),
         hasWebhookSecret: Boolean(vapi.webhookSecret || process.env.VAPI_WEBHOOK_SECRET),
         phoneNumberId: vapi.phoneNumberId || process.env.VAPI_PHONE_NUMBER_ID || null,
+        inboundAssistantId: vapi.inboundAssistantId || null,
       },
+      ...(sync ? { sync } : {}),
     };
   }
 
@@ -84,12 +120,16 @@ export function registerSalesAgentRoutes({ requireAdmin, hasDatabase, pool, sale
       for (const key of EDITABLE) {
         const v = b[key];
         if (v === undefined || v === null) continue;
-        next[key] = String(v);
+        next[key] = typeof v === 'object' ? JSON.stringify(v) : String(v);
       }
       // Validate through the resolver, then store exactly what it accepts.
       const resolved = resolveOrgAgent(next);
       const clean: Record<string, string> = {};
-      for (const key of EDITABLE) if (key in next) clean[key] = String(resolved[key]);
+      for (const key of EDITABLE) {
+        if (!(key in next)) continue;
+        const v = resolved[key];
+        clean[key] = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      }
       await writeRow(SALES_AGENT_PLATFORM, clean);
 
       if (typeof b.phoneNumberId === 'string') {
@@ -101,7 +141,7 @@ export function registerSalesAgentRoutes({ requireAdmin, hasDatabase, pool, sale
       }
 
       void recordAuditLog((admin as any).id, 'admin_sales_agent_updated', [], { fields: Object.keys(b) });
-      return res.json(await view());
+      return res.json(await view(await syncInbound()));
     } catch (err: any) {
       logger.error({ err }, 'sales_agent_config_save_failed');
       return res.status(500).json({ success: false, error: err?.message || 'Save failed' });
@@ -116,11 +156,18 @@ export function registerSalesAgentRoutes({ requireAdmin, hasDatabase, pool, sale
     try {
       await pool.query(`DELETE FROM platform_configs WHERE platform=$1`, [SALES_AGENT_PLATFORM]);
       void recordAuditLog((admin as any).id, 'admin_sales_agent_reset', [], {});
-      return res.json(await view());
+      return res.json(await view(await syncInbound()));
     } catch (err: any) {
       logger.error({ err }, 'sales_agent_config_reset_failed');
       return res.status(500).json({ success: false, error: 'Reset failed' });
     }
+  });
+
+  router.post('/admin/sales-agent/sync-vapi', async (req: Request, res: Response) => {
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+    if (!hasDatabase() || !pool) return res.status(503).json({ success: false, error: 'Database unavailable' });
+    return res.json(await view(await syncInbound()));
   });
 
   // Uses the stored private key to list the account's phone numbers, so the

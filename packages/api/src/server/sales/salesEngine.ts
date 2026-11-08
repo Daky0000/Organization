@@ -73,6 +73,8 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     const withOrg = (p: SalesCallPolicy): SalesCallPolicy => ({
       ...p,
       provider: agent.provider,
+      // The opening wording is the org's (Admin → Sales Voice Agent), not per user.
+      aiDisclosureText: null,
       voiceId: agent.voiceId || null,
       maxCallDurationSec: agent.maxCallDurationSec,
     });
@@ -984,6 +986,7 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     buildCallBriefFor: async (userId: string, contactId: string, opts?: { objective?: string | null; callType?: string | null; note?: string | null }) =>
       buildCallBrief(pool, { userId, contactId, ...opts, agent: await loadOrgAgent() }),
     getOrgAgent: loadOrgAgent,
+    buildVapiProvider,
     ensureLeadProfile,
     evaluateGate,
     queueCall,

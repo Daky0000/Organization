@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, BookOpen, Check, Plus, ShieldCheck, Trash2 } from 'lucide-react';
-import {
-  OBJECTION_LABELS, salesService,
-  type SalesCallPolicy, type SalesLead, type SalesPlaybook,
-} from '../services/salesService';
-import VapiTestConsole from '../components/sales/VapiTestConsole';
+import { AlertTriangle, Check, ShieldCheck } from 'lucide-react';
+import { salesService, type SalesCallPolicy } from '../services/salesService';
 import ReminderSettingsCard from '../components/sales/leads/ReminderSettingsCard';
 
 const ACCENT = '#2563EB';
@@ -27,26 +23,15 @@ const inputClass = 'w-full rounded-xl border border-slate-200 px-3 py-2 text-sm 
 
 export default function SalesSettings() {
   const [policy, setPolicy] = useState<SalesCallPolicy | null>(null);
-  const [playbooks, setPlaybooks] = useState<SalesPlaybook[]>([]);
-  const [leads, setLeads] = useState<SalesLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ objection_code: 'price', title: '', content: '' });
 
   const load = useCallback(async () => {
     try {
       setError(null);
-      const [p, books, leadPage] = await Promise.all([
-        salesService.getPolicy(),
-        salesService.listPlaybooks(),
-        // Only for the test console's "prefill from a real lead" picker.
-        salesService.listLeads({ limit: 50 }).catch(() => ({ leads: [], total: 0 })),
-      ]);
-      setPolicy(p);
-      setPlaybooks(books);
-      setLeads(leadPage.leads);
+      setPolicy(await salesService.getPolicy());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load settings');
     } finally {
@@ -68,17 +53,6 @@ export default function SalesSettings() {
       setError(err instanceof Error ? err.message : 'Failed to save the calling policy');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const addPlaybook = async () => {
-    if (!draft.content.trim()) return;
-    try {
-      await salesService.createPlaybook(draft);
-      setDraft({ objection_code: 'price', title: '', content: '' });
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add the response');
     }
   };
 
@@ -164,16 +138,6 @@ export default function SalesSettings() {
             </span>
           </label>
 
-          {policy.aiDisclosureRequired && (
-            <Field label="Disclosure wording" hint="Leave blank to use the organisation's opening from Admin → Sales Voice Agent.">
-              <input
-                value={policy.aiDisclosureText ?? ''}
-                onChange={(e) => set('aiDisclosureText', e.target.value || null)}
-                placeholder="Hello, this is Ama, an AI assistant calling from Africon…"
-                className={inputClass}
-              />
-            </Field>
-          )}
 
           <label className="flex items-start gap-3">
             <input
@@ -257,18 +221,6 @@ export default function SalesSettings() {
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-sm font-bold text-slate-900">Voice agent</h2>
-        <p className="mt-1 text-xs text-slate-500">
-          The AI caller — its name, opening line, company knowledge, voice, provider and phone number — is set once for
-          the whole organisation by an admin under Admin → Sales Voice Agent.
-        </p>
-        <p className="mt-3 text-xs text-slate-600">
-          Now using: <span className="font-semibold">{policy.provider === 'vapi' ? 'Vapi (real calls)' : 'Simulator (no real calls)'}</span>
-          {' · '}max {Math.round(policy.maxCallDurationSec / 60)} min per call
-        </p>
-      </section>
-
       <div className="flex items-center gap-3">
         <button
           type="button"
@@ -282,69 +234,6 @@ export default function SalesSettings() {
         {saved && <span className="inline-flex items-center gap-1 text-sm text-emerald-600"><Check size={15} /> Saved</span>}
       </div>
 
-      <VapiTestConsole leads={leads} />
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900">
-          <BookOpen size={16} className="text-slate-400" /> Objection playbook
-        </h2>
-        <p className="mt-1 text-xs text-slate-500">
-          How to answer each objection. These are injected into the call brief when the lead has that objection open.
-        </p>
-
-        <div className="mt-4 grid gap-2 sm:grid-cols-[160px_1fr_auto]">
-          <select
-            value={draft.objection_code}
-            onChange={(e) => setDraft({ ...draft, objection_code: e.target.value })}
-            className={inputClass}
-          >
-            {Object.entries(OBJECTION_LABELS).map(([code, label]) => (
-              <option key={code} value={code}>{label}</option>
-            ))}
-          </select>
-          <input
-            value={draft.content}
-            onChange={(e) => setDraft({ ...draft, content: e.target.value })}
-            placeholder="What the caller should say…"
-            className={inputClass}
-          />
-          <button
-            type="button"
-            onClick={() => void addPlaybook()}
-            disabled={!draft.content.trim()}
-            className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            style={{ background: ACCENT }}
-          >
-            <Plus size={14} /> Add
-          </button>
-        </div>
-
-        <ul className="mt-4 space-y-2">
-          {playbooks.length === 0 && <li className="text-sm text-slate-400">No responses yet.</li>}
-          {playbooks.map((p) => (
-            <li key={p.id} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 p-3">
-              <div className="min-w-0">
-                <p className="text-xs font-bold text-slate-800">
-                  {p.objection_code ? (OBJECTION_LABELS[p.objection_code] ?? p.objection_code) : p.kind.replace(/_/g, ' ')}
-                  {p.source !== 'human' && (
-                    <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-600">
-                      AI proposed
-                    </span>
-                  )}
-                </p>
-                <p className="mt-1 text-sm text-slate-600">{p.content}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void salesService.deletePlaybook(p.id).then(load)}
-                className="shrink-0 rounded-lg border border-slate-200 p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-              >
-                <Trash2 size={14} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
     </div>
   );
 }
