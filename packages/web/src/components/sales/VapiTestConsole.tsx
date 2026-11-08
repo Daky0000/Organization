@@ -383,7 +383,7 @@ export default function VapiTestConsole({ leads = [] }: { leads?: SalesLead[] })
         <div className="rounded-xl border border-slate-200 p-4">
           <h3 className="text-sm font-bold text-slate-900">Call a real phone</h3>
           <p className="mt-1 text-xs text-slate-500">
-            Placed server-side with the private key. Capped at 3 minutes, 5 tests an hour.
+            Placed server-side with the private key. Capped at 3 minutes each; the hourly limit is set under Admin → Sales Voice Agent and only counts calls that were actually placed.
           </p>
           <div className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2">
             <select

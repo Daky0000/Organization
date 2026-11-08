@@ -17,7 +17,7 @@ type AgentConfig = {
   endCallMessage: string; voicemailMessage: string; inboundFirstMessage: string;
   provider: 'vapi' | 'simulator'; voiceProvider: string; voiceId: string;
   modelProvider: string; model: string; temperature: number;
-  maxCallDurationSec: number; silenceTimeoutSec: number; defaultCountry: string;
+  maxCallDurationSec: number; silenceTimeoutSec: number; defaultCountry: string; testCallsPerHour: number;
 };
 type View = {
   success: boolean; error?: string; config: AgentConfig; defaults: AgentConfig; customised: boolean;
@@ -230,7 +230,7 @@ export default function AdminSalesAgent() {
             {checking ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Load from Vapi
           </button>
         </div>
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Field label="Provider">
             <select value={draft.provider} onChange={(e) => set('provider', e.target.value as AgentConfig['provider'])} className={inputCls}>
               <option value="vapi">Vapi (real calls)</option>
@@ -242,6 +242,9 @@ export default function AdminSalesAgent() {
           </Field>
           <Field label="Hang up after silence (sec)">
             <input type="number" min={10} max={120} value={draft.silenceTimeoutSec} onChange={(e) => set('silenceTimeoutSec', Number(e.target.value))} className={inputCls} />
+          </Field>
+          <Field label="Test calls per hour" hint="Only placed calls count.">
+            <input type="number" min={1} max={200} value={draft.testCallsPerHour} onChange={(e) => set('testCallsPerHour', Number(e.target.value))} className={inputCls} />
           </Field>
         </div>
         <Field label="Country for local numbers"

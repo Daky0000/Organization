@@ -73,6 +73,8 @@ export interface OrgAgentConfig {
   silenceTimeoutSec: number;
   /** ISO country used to read local numbers (0…) when the lead's country is unknown. */
   defaultCountry: string;
+  /** Test calls (actually placed) allowed per hour, per user. */
+  testCallsPerHour: number;
 }
 
 const AFRICON_KNOWLEDGE = `WHO WE ARE
@@ -167,6 +169,7 @@ export const AFRICON_DEFAULT_AGENT: OrgAgentConfig = {
   maxCallDurationSec: 420,
   silenceTimeoutSec: 30,
   defaultCountry: 'GH',
+  testCallsPerHour: 20,
 };
 
 /** OpenAI models Vapi accepts (from Vapi's own validation error, 2026-11-08). */
@@ -291,6 +294,7 @@ export function resolveOrgAgent(stored: Record<string, unknown> | null | undefin
   out.temperature = num(s.temperature, 0, 1, out.temperature);
   out.maxCallDurationSec = Math.round(num(s.maxCallDurationSec, 60, 1800, out.maxCallDurationSec));
   out.silenceTimeoutSec = Math.round(num(s.silenceTimeoutSec, 10, 120, out.silenceTimeoutSec));
+  out.testCallsPerHour = Math.round(num(s.testCallsPerHour, 1, 200, out.testCallsPerHour));
   return out;
 }
 

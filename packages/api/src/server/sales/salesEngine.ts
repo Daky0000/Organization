@@ -850,13 +850,18 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
   // and never feeds the timing model. Test data must not contaminate the
   // statistics the real system learns from.
 
-  const TEST_CALLS_PER_HOUR = 5;
   const TEST_CALL_MAX_DURATION_SEC = 180;
 
+  /**
+   * Test calls Vapi actually placed in the last hour. A test Vapi rejected
+   * (bad number, bad model) has no external_id and cost nothing, so it does
+   * not use up the limit — setup mistakes must not lock the tester out.
+   */
   async function testCallsInLastHour(userId: string): Promise<number> {
     const { rows } = await pool.query(
       `SELECT COUNT(*)::int AS n FROM sales_call_attempts
-        WHERE user_id=$1 AND is_test=true AND created_at >= NOW() - INTERVAL '1 hour'`,
+        WHERE user_id=$1 AND is_test=true AND external_id IS NOT NULL
+          AND created_at >= NOW() - INTERVAL '1 hour'`,
       [userId],
     );
     return Number(rows[0]?.n ?? 0);
@@ -898,9 +903,11 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     firstMessage?: string | null;
     voiceId?: string | null;
   }): Promise<{ attemptId: string; externalId: string }> {
-    const used = await testCallsInLastHour(params.userId);
-    if (used >= TEST_CALLS_PER_HOUR) {
-      throw new Error(`Test call limit reached (${TEST_CALLS_PER_HOUR} per hour). Try again later.`);
+    const [used, org] = await Promise.all([testCallsInLastHour(params.userId), loadOrgAgent()]);
+    if (used >= org.testCallsPerHour) {
+      throw new Error(
+        `Test call limit reached (${org.testCallsPerHour} placed calls per hour). Raise it under Admin → Sales Voice Agent, or try again later.`,
+      );
     }
 
     const { provider, assistant, firstMessage } = await buildTestAssistant(params);
