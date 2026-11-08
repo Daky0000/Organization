@@ -4521,6 +4521,7 @@ await pool.query(`CREATE INDEX IF NOT EXISTS campaign_members_contact_idx ON cam
 await createLeadgenTables(pool);
 await createSalesTables(pool);
 await createSalesLeadWorkspaceTables(pool);
+await createSalesEventTables(pool);
   await runIncrementalUpgradeMigrations(pool);
 
 }
@@ -5029,6 +5030,114 @@ async function createSalesLeadWorkspaceTables(pool: Pool): Promise<void> {
       sent_at     TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY (user_id, digest_date)
     )`);
+}
+
+// ── Sales → Events (Africon) ──────────────────────────────────────────────────
+//
+// Africon's events, read from africon.ai on a schedule, and the people who
+// booked, failed to book or showed interest in them. Events are organisation
+// wide (one site, one org); bookings belong to the sales account that owns the
+// leads, like every other sales table.
+//
+// sales_event_bookings is the call plan as well as the record: next_call_at is
+// when the agent should next call this person about this event, and the
+// planner claims due rows with FOR UPDATE SKIP LOCKED like the dial queue.
+// Keep the CHECK lists in sync with packages/api/src/server/sales/eventBookings.ts.
+async function createSalesEventTables(pool: Pool): Promise<void> {
+  const step = async (name: string, sql: string) => {
+    await pool.query(sql).catch((err) => logger.error({ err }, `migration_failed: ${name}`));
+  };
+
+  await step('sales_events', `
+    CREATE TABLE IF NOT EXISTS sales_events (
+      id               TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      source           TEXT NOT NULL DEFAULT 'africon',
+      external_id      TEXT NOT NULL,
+      slug             TEXT NOT NULL,
+      title            TEXT NOT NULL,
+      url              TEXT,
+      status           TEXT,
+      start_date       DATE,
+      end_date         DATE,
+      data             JSONB NOT NULL,
+      fingerprint      TEXT,
+      strategy         JSONB,
+      first_seen_at    TIMESTAMPTZ DEFAULT NOW(),
+      last_seen_at     TIMESTAMPTZ DEFAULT NOW(),
+      last_changed_at  TIMESTAMPTZ DEFAULT NOW(),
+      removed_at       TIMESTAMPTZ,
+      created_at       TIMESTAMPTZ DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (source, external_id)
+    )`);
+  await step('sales_events_slug_idx', `CREATE INDEX IF NOT EXISTS sales_events_slug_idx ON sales_events (source, slug)`);
+
+  await step('sales_event_changes', `
+    CREATE TABLE IF NOT EXISTS sales_event_changes (
+      id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      event_id   TEXT NOT NULL REFERENCES sales_events(id) ON DELETE CASCADE,
+      kind       TEXT NOT NULL,
+      summary    TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  await step('sales_event_changes_idx', `CREATE INDEX IF NOT EXISTS sales_event_changes_idx ON sales_event_changes (event_id, created_at DESC)`);
+
+  await step('sales_event_sync_runs', `
+    CREATE TABLE IF NOT EXISTS sales_event_sync_runs (
+      id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      trigger         TEXT NOT NULL DEFAULT 'schedule',
+      source          TEXT,
+      status          TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','ok','partial','failed')),
+      events_found    INT NOT NULL DEFAULT 0,
+      events_new      INT NOT NULL DEFAULT 0,
+      events_changed  INT NOT NULL DEFAULT 0,
+      bookings_pulled INT NOT NULL DEFAULT 0,
+      warnings        JSONB NOT NULL DEFAULT '[]',
+      error           TEXT,
+      started_at      TIMESTAMPTZ DEFAULT NOW(),
+      finished_at     TIMESTAMPTZ
+    )`);
+  await step('sales_event_sync_runs_idx', `CREATE INDEX IF NOT EXISTS sales_event_sync_runs_idx ON sales_event_sync_runs (started_at DESC)`);
+
+  await step('sales_event_bookings', `
+    CREATE TABLE IF NOT EXISTS sales_event_bookings (
+      id               TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_id         TEXT REFERENCES sales_events(id) ON DELETE SET NULL,
+      event_ref        TEXT NOT NULL,
+      contact_id       TEXT NOT NULL REFERENCES mailing_contacts(id) ON DELETE CASCADE,
+      external_id      TEXT,
+      status           TEXT NOT NULL CHECK (status IN ('interested','started','payment_failed','pay_later','pending_review','confirmed','attended','no_show','cancelled')),
+      raw_status       TEXT,
+      segment          TEXT NOT NULL CHECK (segment IN ('failed_booking','unpaid','upcoming','interested','awaiting_review','past','cancelled')),
+      cohort_id        TEXT,
+      cohort_label     TEXT,
+      session_date     DATE,
+      attendees        INT,
+      amount           NUMERIC,
+      currency         TEXT,
+      source           TEXT,
+      via              TEXT NOT NULL DEFAULT 'webhook',
+      notes            TEXT,
+      answers          JSONB NOT NULL DEFAULT '{}',
+      booked_at        TIMESTAMPTZ,
+      last_event_at    TIMESTAMPTZ,
+      payment_due_at   TIMESTAMPTZ,
+      next_call_at     TIMESTAMPTZ,
+      call_segment     TEXT,
+      calls_made       INT NOT NULL DEFAULT 0,
+      last_attempt_id  TEXT,
+      last_call_at     TIMESTAMPTZ,
+      created_at       TIMESTAMPTZ DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  await step('sales_event_bookings_person_uq', `CREATE UNIQUE INDEX IF NOT EXISTS sales_event_bookings_person_uq ON sales_event_bookings (user_id, event_ref, contact_id)`);
+  await step('sales_event_bookings_event_idx', `CREATE INDEX IF NOT EXISTS sales_event_bookings_event_idx ON sales_event_bookings (event_id, segment)`);
+  await step('sales_event_bookings_due_idx', `CREATE INDEX IF NOT EXISTS sales_event_bookings_due_idx ON sales_event_bookings (next_call_at) WHERE next_call_at IS NOT NULL`);
+  await step('sales_event_bookings_contact_idx', `CREATE INDEX IF NOT EXISTS sales_event_bookings_contact_idx ON sales_event_bookings (contact_id, updated_at DESC)`);
+
+  // Which booking a call is about, so the brief can carry the event and its plan.
+  await step('sales_call_attempts.event_booking_id', `ALTER TABLE sales_call_attempts ADD COLUMN IF NOT EXISTS event_booking_id TEXT`);
 }
 
 // ── Marketing → Lead Generation ───────────────────────────────────────────────

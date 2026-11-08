@@ -96,11 +96,9 @@ WHAT WE OFFER
 5. Social media management for African brands: content calendars, community management, paid ads on Meta, TikTok and LinkedIn, monthly analytics.
 6. AIKASA: Africon's guided AI learning membership for African professionals. Founding registration closed on 15 July 2026 and paid registration is closed; people can join the waitlist free at africon.ai/aikasa. Do not quote AIKASA prices.
 
-UPCOMING EVENTS (Accra)
- - Executive AI Masterclass for CEOs, MDs and Founders: 13–14 November, GHS 4,250 (first 30 CEOs).
- - Build AI Adoption into Your 2027 Plans, with CEIBS Africa: 26 November, one day, GHS 4,000.
- - 2-Day Comprehensive AI Masterclass for Finance Professionals (Cohort 3): 11–12 December, GHS 3,000.
- - Robotics & AI after-school programme for children aged 4–17.
+EVENTS (Accra)
+Africon runs masterclasses and programmes: an Executive AI Masterclass for CEOs, MDs and Founders; a one-day AI adoption programme with CEIBS Africa; a 2-Day Comprehensive AI Masterclass for Finance Professionals; and a Robotics & AI after-school programme for children aged 4–17.
+Dates, prices and seats are read from africon.ai several times a day and listed under LIVE EVENTS. Quote event dates and prices only from LIVE EVENTS; if no LIVE EVENTS list is given, say the team will confirm the next date and price.
 Only mention an event if it fits the person, and only if its date has not passed.
 
 WHO WE WORK WITH
@@ -344,9 +342,10 @@ export function fillTemplate(text: string, agent: Pick<OrgAgentConfig, 'agentNam
  * The brief for someone who rings the number. There is no lead record, so it
  * is the org's persona, knowledge and rules plus inbound guidance: find out
  * who is calling and what they need, answer from the knowledge, and capture
- * the details for the team to follow up.
+ * the details for the team to follow up. `liveEvents` is the LIVE EVENTS
+ * block read from africon.ai (sales/eventContext.ts), when events are synced.
  */
-export function buildInboundSystemPrompt(agent: OrgAgentConfig): string {
+export function buildInboundSystemPrompt(agent: OrgAgentConfig, liveEvents = ''): string {
   const rules = agent.extraRules
     .split('\n').map((l) => l.trim().replace(/^[-•]\s*/, '')).filter(Boolean).map((l) => `- ${l}`);
   return [
@@ -358,6 +357,7 @@ export function buildInboundSystemPrompt(agent: OrgAgentConfig): string {
     '',
     'ABOUT OUR BUSINESS',
     agent.knowledge.trim(),
+    liveEvents.trim() ? `\n${liveEvents.trim()}` : '',
     '',
     agent.playbook.length || agent.objectionHandling.trim() ? `OBJECTION PLAYBOOK — how to handle what callers say\n${renderPlaybook(agent)}\n` : '',
     'DO NOT',

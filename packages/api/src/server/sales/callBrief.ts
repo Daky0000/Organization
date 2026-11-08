@@ -21,6 +21,7 @@ import { buildSharedAgentContext } from '../agentSharedContext.ts';
 import { OBJECTION_LABELS, isCallType, type CallType, type ObjectionCode } from './types.ts';
 import { getLeadSheetContext, renderLeadSheet } from './leadSheetContext.ts';
 import { fillTemplate, renderPlaybook, type OrgAgentConfig } from './orgAgent.ts';
+import { getEventCallContext, getLiveEventsText } from './eventContext.ts';
 
 export interface CallBrief {
   /** The system prompt for the voice agent. */
@@ -101,12 +102,18 @@ export async function buildCallBrief(
     note?: string | null;
     /** The organisation's agent (Admin → Sales Voice Agent): identity, knowledge, opening line. */
     agent?: OrgAgentConfig | null;
+    /** An Africon event booking this call is about (Sales → Events). */
+    eventBookingId?: string | null;
   },
 ): Promise<CallBrief> {
   const { userId, contactId } = params;
   const callType: CallType = isCallType(params.callType) ? params.callType : 'sales';
   const typeBrief = CALL_TYPE_BRIEFS[callType];
-  const sheet = await getLeadSheetContext(pool, userId, contactId).catch(() => null);
+  const [sheet, eventContext, liveEvents] = await Promise.all([
+    getLeadSheetContext(pool, userId, contactId).catch(() => null),
+    params.eventBookingId ? getEventCallContext(pool, userId, params.eventBookingId).catch(() => '') : Promise.resolve(''),
+    getLiveEventsText(pool).catch(() => ''),
+  ]);
 
   const [contactRes, profileRes, lastConvRes, objectionsRes, promisesRes, playbookRes] = await Promise.all([
     pool.query(
@@ -188,7 +195,9 @@ export async function buildCallBrief(
   }
 
   const sharedContext = await buildSharedAgentContext(userId).catch(() => '');
-  const business = [agent?.knowledge?.trim(), sharedContext].filter(Boolean).join('\n\n');
+  // A call about one event already carries that event in full; the live list
+  // still goes in, so the agent can answer "what else is coming up?".
+  const business = [agent?.knowledge?.trim(), liveEvents, sharedContext].filter(Boolean).join('\n\n');
   const objectionGuide = agent ? renderPlaybook(agent, OBJECTION_LABELS) : '';
   const extraRules = (agent?.extraRules || '')
     .split('\n')
@@ -224,6 +233,7 @@ export async function buildCallBrief(
     objective,
     params.followUpReason ? `\nWhy we are calling now: ${params.followUpReason}` : '',
     params.note?.trim() ? `\nNOTES FROM THE TEAM FOR THIS CALL (follow these):\n${params.note.trim().slice(0, 2000)}` : '',
+    eventContext ? `\n${eventContext}` : '',
     '',
     'WHO YOU ARE CALLING',
     whoParts.map((p) => `- ${p}`).join('\n'),

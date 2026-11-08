@@ -19,6 +19,7 @@ import {
   Cpu,
   Activity,
   Mic,
+  CalendarDays,
 } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { AppUser, clearStoredUser } from '../utils/userSession';
@@ -39,6 +40,7 @@ const AdminAgents = lazy(() => import('../components/admin/AdminAgents'));
 const AdminMagnific = lazy(() => import('../components/admin/AdminMagnific'));
 const AdminNvidia = lazy(() => import('../components/admin/AdminNvidia'));
 const AdminSalesAgent = lazy(() => import('../components/admin/AdminSalesAgent'));
+const AdminSalesEvents = lazy(() => import('../components/admin/AdminSalesEvents'));
 const AdminAIOps = lazy(() => import('../components/admin/AdminAIOps'));
 const AdminKling = lazy(() => import('../components/admin/AdminKling'));
 const AdminGoogle = lazy(() => import('../components/admin/AdminGoogle'));
@@ -80,7 +82,8 @@ const Admin = ({ currentUser }: AdminProps) => {
     | 'google'
     | 'openai'
     | 'mcp'
-    | 'sales-agent';
+    | 'sales-agent'
+    | 'sales-events';
 
   const TAB_PATHS: Record<AdminTab, string> = {
     overview: '/admin/overview',
@@ -110,6 +113,7 @@ const Admin = ({ currentUser }: AdminProps) => {
     openai: '/admin/openai',
     mcp: '/admin/mcp',
     'sales-agent': '/admin/sales-agent',
+    'sales-events': '/admin/sales-events',
   };
 
   const TAB_LABELS: Record<AdminTab, string> = {
@@ -140,6 +144,7 @@ const Admin = ({ currentUser }: AdminProps) => {
     openai: 'OpenAI',
     mcp: 'MCP Servers',
     'sales-agent': 'Sales Voice Agent',
+    'sales-events': 'Sales Events',
   };
 
   const PATH_TO_TAB: Record<string, AdminTab> = Object.fromEntries(
@@ -189,6 +194,7 @@ const Admin = ({ currentUser }: AdminProps) => {
     { id: 'auth-providers', label: 'Login Providers', icon: KeyRound, active: true },
     { id: 'integrations', label: 'Integrations', icon: Waypoints, active: true },
     { id: 'sales-agent', label: 'Sales Voice Agent', icon: Mic, active: true },
+    { id: 'sales-events', label: 'Sales Events', icon: CalendarDays, active: true },
     { id: 'media', label: 'Media', icon: Image, active: true },
     { id: 'mcp', label: 'MCP', icon: Plug, active: true },
     { id: 'settings', label: 'Platform Settings', icon: SlidersHorizontal, active: true },
@@ -530,6 +536,7 @@ const Admin = ({ currentUser }: AdminProps) => {
               {activeTab === 'apify' && <AdminApify />}
               {activeTab === 'mcp' && <AdminMCP />}
               {activeTab === 'sales-agent' && <AdminSalesAgent />}
+              {activeTab === 'sales-events' && <AdminSalesEvents />}
               {activeTab === 'learn' && <AdminLearn />}
               {activeTab === 'agents' && <AdminAgents />}
               {activeTab === 'magnific' && <AdminMagnific />}

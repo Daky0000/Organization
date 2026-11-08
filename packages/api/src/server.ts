@@ -48,7 +48,9 @@ import { registerCRMCompaniesRoutes } from './server/crmCompaniesRoutes.ts';
 import { registerCRMDealsRoutes } from './server/crmDealsRoutes.ts';
 import { registerCRMActivitiesRoutes } from './server/crmActivitiesRoutes.ts';
 import { registerSalesRoutes } from './server/salesRoutes.ts';
-import { registerSalesAgentRoutes } from './server/salesAgentRoutes.ts';
+import { buildInboundSync, registerSalesAgentRoutes } from './server/salesAgentRoutes.ts';
+import { registerSalesEventsRoutes } from './server/salesEventsRoutes.ts';
+import { buildEventsEngine } from './server/sales/eventsEngine.ts';
 import { registerSalesLeadsRoutes } from './server/salesLeadsRoutes.ts';
 import { processPendingActivityReads } from './server/sales/leadActivities.ts';
 import { runLeadDigests, runLeadReminders } from './server/sales/leadReminders.ts';
@@ -217,6 +219,13 @@ app.set('trust proxy', 1);
 // delegate to it) and before the webhook router (which normalizes provider call
 // events through it).
 const salesEngine = buildSalesEngine({ pool: pool!, getPlatformConfig });
+// Sales → Events: Africon's events read from africon.ai, bookings from
+// Africon's backend, and the calls planned from them. A sync that changes the
+// events also refreshes the assistant that answers the phone number.
+const inboundSync = buildInboundSync(pool, salesEngine);
+const eventsEngine = buildEventsEngine({
+  pool: pool!, getPlatformConfig, salesEngine, onEventsChanged: () => inboundSync.syncInbound(),
+});
 
 // Automation engine executes the flows built in Marketing → Automations.
 // Built before all routes so public forms, webhooks, and mailing can fire triggers.
@@ -945,6 +954,8 @@ app.get('/api/autopilot/ops/diagnostics', async (req: Request, res: Response) =>
 // Built on the CRM contact rather than beside it: sales_lead_profiles hangs off
 // mailing_contacts, and every analysed conversation also writes a crm_activities
 // row so the Companies and Pipeline pages pick it up with no sync job.
+// Events first: /api/sales/events/* and the signed Africon bookings endpoint.
+app.use('/api', registerSalesEventsRoutes({ requireAuth, requireAdmin, pool: pool!, eventsEngine }));
 // Lead workspace first: its literal paths must win over /leads/:contactId.
 app.use('/api/sales', registerSalesLeadsRoutes({ requireAuth, pool: pool! }));
 app.use('/api/sales', registerSalesRoutes({ requireAuth, pool: pool!, salesEngine }));
@@ -1266,6 +1277,13 @@ if (config.nodeEnv !== 'test') {
     // Weekly pattern mining. Proposals only — nothing is applied without a human.
     setTimeout(() => void salesEngine.runWeeklyInsights(), 45 * 60 * 1000);
     setInterval(() => void salesEngine.runWeeklyInsights(), 7 * 24 * 60 * 60 * 1000);
+    // Read africon.ai when the last sync is older than the configured interval
+    // (6 hours by default). Checked every 15 minutes; first check 2 minutes in.
+    setTimeout(() => void eventsEngine.runScheduledSync(), 2 * 60 * 1000);
+    setInterval(() => void eventsEngine.runScheduledSync(), 15 * 60 * 1000);
+    // Event call plan: schedule retries, and queue due calls when auto-calling
+    // is on. Queued calls still pass the gate and the approval queue.
+    setInterval(() => void eventsEngine.processDueEventCalls(), 5 * 60 * 1000);
 
     // ── Sales lead workspace ──
     // Retry AI reads of activity notes whose inline read timed out.

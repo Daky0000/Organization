@@ -276,6 +276,8 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     note?: string | null;
     /** Park the call in the approval queue instead of letting the worker dial it. */
     awaitApproval?: boolean;
+    /** The event booking this call is about: the brief then carries the event and its call plan. */
+    eventBookingId?: string | null;
     now?: Date;
   }): Promise<{
     queued: boolean; awaitingApproval: boolean; attemptId: string | null; decision: CallDecision;
@@ -302,12 +304,12 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
       const { rows } = await pool.query(
         `INSERT INTO sales_call_attempts
            (id, user_id, contact_id, lead_profile_id, followup_id, provider, objective,
-            status, outcome, block_reason, run_at, call_type, call_note)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'blocked','blocked',$8,NOW(),$9,$10) RETURNING id`,
+            status, outcome, block_reason, run_at, call_type, call_note, event_booking_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'blocked','blocked',$8,NOW(),$9,$10,$11) RETURNING id`,
         [
           randomUUID(), params.userId, params.contactId, leadProfileId, params.followUpId ?? null,
           ctx.policy.provider, params.objective ?? null, `${ctx.decision.code}: ${ctx.decision.reason}`,
-          callType, note,
+          callType, note, params.eventBookingId ?? null,
         ],
       );
       return { queued: false, awaitingApproval: false, attemptId: rows[0]?.id ?? null, decision: ctx.decision, ...extra };
@@ -316,12 +318,12 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     const runAt = ctx.decision.action === 'reschedule' ? ctx.decision.runAt : now;
     const { rows } = await pool.query(
       `INSERT INTO sales_call_attempts
-         (id, user_id, contact_id, lead_profile_id, followup_id, provider, to_number, objective, status, run_at, call_type, call_note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+         (id, user_id, contact_id, lead_profile_id, followup_id, provider, to_number, objective, status, run_at, call_type, call_note, event_booking_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
       [
         randomUUID(), params.userId, params.contactId, leadProfileId, params.followUpId ?? null,
         ctx.policy.provider, ctx.phone, params.objective ?? null,
-        params.awaitApproval ? 'awaiting_approval' : 'queued', runAt, callType, note,
+        params.awaitApproval ? 'awaiting_approval' : 'queued', runAt, callType, note, params.eventBookingId ?? null,
       ],
     );
     return { queued: true, awaitingApproval: !!params.awaitApproval, attemptId: rows[0]?.id ?? null, decision: ctx.decision, ...extra };
@@ -389,7 +391,7 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
              WHERE status='queued' AND run_at <= NOW()
              ORDER BY run_at LIMIT ${CALL_BATCH} FOR UPDATE SKIP LOCKED
           )
-          RETURNING id, user_id, contact_id, followup_id, objective, to_number, call_type, call_note`,
+          RETURNING id, user_id, contact_id, followup_id, objective, to_number, call_type, call_note, event_booking_id`,
         [],
       );
       claimed = rows;
@@ -435,6 +437,7 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
           objective: attempt.objective,
           callType: attempt.call_type,
           note: attempt.call_note,
+          eventBookingId: attempt.event_booking_id,
           agent,
         });
         const firstMessage = applyDisclosures(brief.firstMessage, ctx.policy, null, agent);
@@ -1180,7 +1183,7 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     listTestCalls,
     reconcileOpenCalls,
     hangUpCall,
-    buildCallBriefFor: async (userId: string, contactId: string, opts?: { objective?: string | null; callType?: string | null; note?: string | null }) =>
+    buildCallBriefFor: async (userId: string, contactId: string, opts?: { objective?: string | null; callType?: string | null; note?: string | null; eventBookingId?: string | null }) =>
       buildCallBrief(pool, { userId, contactId, ...opts, agent: await loadOrgAgent() }),
     getOrgAgent: loadOrgAgent,
     buildVapiProvider,

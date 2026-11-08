@@ -21,6 +21,7 @@ import {
   AFRICON_DEFAULT_AGENT, SALES_AGENT_PLATFORM, buildInboundSystemPrompt, fillTemplate, resolveOrgAgent,
 } from './sales/orgAgent.ts';
 import type { SalesEngine } from './sales/salesEngine.ts';
+import { getLiveEventsText } from './sales/eventContext.ts';
 
 interface Deps {
   requireAdmin: (req: Request, res: Response) => Promise<any>;
@@ -31,61 +32,12 @@ interface Deps {
 
 const EDITABLE = Object.keys(AFRICON_DEFAULT_AGENT) as (keyof typeof AFRICON_DEFAULT_AGENT)[];
 
+export type InboundSyncResult = { ok: boolean; skipped?: string; error?: string; assistantId?: string };
+
 export function registerSalesAgentRoutes({ requireAdmin, hasDatabase, pool, salesEngine }: Deps): Router {
   const router = express.Router();
-
-  async function readRow(platform: string): Promise<Record<string, any>> {
-    if (!pool) return {};
-    const { rows } = await pool.query(`SELECT config FROM platform_configs WHERE platform=$1 LIMIT 1`, [platform]);
-    return decryptPlatformConfig(rows[0]?.config) ?? {};
-  }
-
-  async function writeRow(platform: string, config: Record<string, any>) {
-    await pool!.query(
-      `INSERT INTO platform_configs (platform, config, enabled, updated_at) VALUES ($1, $2, true, NOW())
-       ON CONFLICT (platform) DO UPDATE SET config=$2, updated_at=NOW()`,
-      [platform, JSON.stringify(encryptPlatformConfig(config))],
-    );
-  }
-
-  type SyncResult = { ok: boolean; skipped?: string; error?: string; assistantId?: string };
-
-  /**
-   * Push the agent to Vapi as the assistant that answers the phone number, so
-   * calling the number reaches it. Runs after every save; never throws.
-   */
-  async function syncInbound(): Promise<SyncResult> {
-    try {
-      const [agent, stored] = await Promise.all([salesEngine.getOrgAgent(), readRow('vapi')]);
-      let vapi = stored;
-      const phoneNumberId = vapi.phoneNumberId || process.env.VAPI_PHONE_NUMBER_ID || '';
-      if (!(vapi.apiKey || vapi.privateKey || process.env.VAPI_API_KEY)) return { ok: false, skipped: 'No Vapi private key yet' };
-      if (!phoneNumberId) return { ok: false, skipped: 'No phone number chosen yet' };
-      // Vapi never issues a webhook secret — it is whatever we send. Make one
-      // so call reports are verified without anyone pasting a secret around.
-      if (!vapi.webhookSecret && !process.env.VAPI_WEBHOOK_SECRET) {
-        vapi = { ...vapi, webhookSecret: randomBytes(24).toString('hex') };
-        await writeRow('vapi', vapi);
-      }
-      const provider = await salesEngine.buildVapiProvider(agent);
-      const assistant = provider.buildAssistant({
-        firstMessage: fillTemplate(agent.inboundFirstMessage, agent),
-        systemPrompt: buildInboundSystemPrompt(agent),
-        voiceId: agent.voiceId || null,
-        maxDurationSec: agent.maxCallDurationSec,
-        recordingEnabled: true,
-      });
-      const { assistantId } = await provider.syncInboundAssistant({
-        assistantId: vapi.inboundAssistantId || null,
-        assistant,
-        phoneNumberId,
-      });
-      if (assistantId !== vapi.inboundAssistantId) await writeRow('vapi', { ...vapi, inboundAssistantId: assistantId });
-      return { ok: true, assistantId };
-    } catch (err: any) {
-      return { ok: false, error: err?.message || 'Vapi sync failed' };
-    }
-  }
+  const { readRow, writeRow, syncInbound } = buildInboundSync(pool, salesEngine);
+  type SyncResult = InboundSyncResult;
 
   async function view(sync?: SyncResult) {
     const [stored, vapi] = await Promise.all([readRow(SALES_AGENT_PLATFORM), readRow('vapi')]);
@@ -209,4 +161,66 @@ export function registerSalesAgentRoutes({ requireAdmin, hasDatabase, pool, sale
   });
 
   return router;
+}
+
+/**
+ * The Vapi inbound assistant: the org agent plus the live events, pushed to
+ * the assistant that answers the phone number. Used after an agent save and
+ * after an events sync that changed something.
+ */
+export function buildInboundSync(pool: Pool | null, salesEngine: SalesEngine) {
+  async function readRow(platform: string): Promise<Record<string, any>> {
+    if (!pool) return {};
+    const { rows } = await pool.query(`SELECT config FROM platform_configs WHERE platform=$1 LIMIT 1`, [platform]);
+    return decryptPlatformConfig(rows[0]?.config) ?? {};
+  }
+
+  async function writeRow(platform: string, config: Record<string, any>) {
+    await pool!.query(
+      `INSERT INTO platform_configs (platform, config, enabled, updated_at) VALUES ($1, $2, true, NOW())
+       ON CONFLICT (platform) DO UPDATE SET config=$2, updated_at=NOW()`,
+      [platform, JSON.stringify(encryptPlatformConfig(config))],
+    );
+  }
+
+  /**
+   * Push the agent to Vapi as the assistant that answers the phone number, so
+   * calling the number reaches it. Runs after every save; never throws.
+   */
+  async function syncInbound(): Promise<InboundSyncResult> {
+    try {
+      const [agent, stored, liveEvents] = await Promise.all([
+        salesEngine.getOrgAgent(), readRow('vapi'), pool ? getLiveEventsText(pool).catch(() => '') : Promise.resolve(''),
+      ]);
+      let vapi = stored;
+      const phoneNumberId = vapi.phoneNumberId || process.env.VAPI_PHONE_NUMBER_ID || '';
+      if (!(vapi.apiKey || vapi.privateKey || process.env.VAPI_API_KEY)) return { ok: false, skipped: 'No Vapi private key yet' };
+      if (!phoneNumberId) return { ok: false, skipped: 'No phone number chosen yet' };
+      // Vapi never issues a webhook secret — it is whatever we send. Make one
+      // so call reports are verified without anyone pasting a secret around.
+      if (!vapi.webhookSecret && !process.env.VAPI_WEBHOOK_SECRET) {
+        vapi = { ...vapi, webhookSecret: randomBytes(24).toString('hex') };
+        await writeRow('vapi', vapi);
+      }
+      const provider = await salesEngine.buildVapiProvider(agent);
+      const assistant = provider.buildAssistant({
+        firstMessage: fillTemplate(agent.inboundFirstMessage, agent),
+        systemPrompt: buildInboundSystemPrompt(agent, liveEvents),
+        voiceId: agent.voiceId || null,
+        maxDurationSec: agent.maxCallDurationSec,
+        recordingEnabled: true,
+      });
+      const { assistantId } = await provider.syncInboundAssistant({
+        assistantId: vapi.inboundAssistantId || null,
+        assistant,
+        phoneNumberId,
+      });
+      if (assistantId !== vapi.inboundAssistantId) await writeRow('vapi', { ...vapi, inboundAssistantId: assistantId });
+      return { ok: true, assistantId };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Vapi sync failed' };
+    }
+  }
+
+  return { readRow, writeRow, syncInbound };
 }
