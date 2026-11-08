@@ -169,6 +169,10 @@ export const DEFAULT_TOOL_RULES: Record<string, ToolRule> = {
   get_connected_platforms: { risk: 'read', perTurn: 4 },
   get_my_tasks: { risk: 'read', perTurn: 4 },
   get_my_projects: { risk: 'read', perTurn: 4 },
+  find_sales_leads: { risk: 'read', perTurn: 6, maxArgChars: 1_000 },
+  get_sales_call_results: { risk: 'read', perTurn: 4, maxArgChars: 1_000 },
+  // Phones a real person: external, so a tainted turn cannot place one.
+  call_sales_lead: { risk: 'external', perTurn: 10, maxArgChars: 4_000 },
   create_draft: { risk: 'write', perTurn: 5, maxArgChars: 20_000 },
   remember_preference: { risk: 'write', perTurn: 6, maxArgChars: 1_000 },
   create_task: { risk: 'write', perTurn: 8, maxArgChars: 4_000 },

@@ -70,6 +70,11 @@ export const CALL_TYPE_BRIEFS: Record<CallType, { label: string; objective: stri
     objective: 'Make the follow-up call that was scheduled for this lead.',
     guidance: 'You are making a follow-up call that was scheduled earlier (see the open reminders and recent activity below). Say why you are calling back and move the conversation to the next step.',
   },
+  notice: {
+    label: 'Notice / important information',
+    objective: 'Deliver the message in the notes clearly and make sure they understood it.',
+    guidance: 'This is a short call to pass on important information, not a sales pitch. Say the message from the notes plainly, in your own words, near the start. Then check they understood, and answer questions only from the notes and the details below — if something is not written there, say the team will confirm. Repeat any date, time, place or amount exactly as written. Keep it under two minutes.',
+  },
 };
 
 function bullets(items: string[], empty: string): string {

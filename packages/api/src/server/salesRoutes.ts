@@ -14,6 +14,7 @@ import type { Pool } from 'pg';
 import { logger } from '../logger.ts';
 import { buildSalesEngine, type SalesEngine } from './sales/salesEngine.ts';
 import { describePhone, toCountryCode } from './sales/orgAgent.ts';
+import { isCallTypeChoice, phoneTypeLabel } from './sales/callPlanner.ts';
 import type { CountryCode } from 'libphonenumber-js/max';
 import { scoreCallWindows } from './sales/callTiming.ts';
 import { runInsightAgent } from './sales/insightAgent.ts';
@@ -476,13 +477,46 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
     }
   });
 
+  /**
+   * Plan a call before it is queued: what it is for (and why), which number
+   * will be dialled (country, line type, which column it came from), and
+   * whether the calling policy allows it now. Nothing is written.
+   */
+  router.post('/calls/plan', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      const { contact_id, call_type, note } = req.body ?? {};
+      if (!contact_id) return fail(res, 400, 'contact_id is required');
+      if (call_type != null && !isCallTypeChoice(call_type)) return fail(res, 400, `call_type must be auto or one of: ${CALL_TYPES.join(', ')}`);
+      const plan = await salesEngine.previewCall({
+        userId: auth.userId, contactId: String(contact_id),
+        callType: call_type ?? 'auto', note: typeof note === 'string' ? note : null,
+      });
+      if (!plan) return fail(res, 404, 'Lead not found');
+      res.json({
+        success: true,
+        plan: {
+          ...plan,
+          number: {
+            ...plan.number,
+            typeLabel: plan.number.phone ? phoneTypeLabel(plan.number.phone.type) : null,
+          },
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, 'sales_call_plan_failed');
+      fail(res, 500, 'Failed to plan the call');
+    }
+  });
+
   router.post('/calls/queue', async (req, res) => {
     const auth = requireAuth(req, res);
     if (!auth) return;
     try {
       const { contact_id, objective, call_type, note } = req.body ?? {};
       if (!contact_id) return fail(res, 400, 'contact_id is required');
-      if (call_type != null && !isCallType(call_type)) return fail(res, 400, `call_type must be one of: ${CALL_TYPES.join(', ')}`);
+      if (call_type != null && !isCallTypeChoice(call_type)) return fail(res, 400, `call_type must be auto or one of: ${CALL_TYPES.join(', ')}`);
       // One click on one lead is the approval — the call goes straight to the queue.
       const result = await salesEngine.queueCall({
         userId: auth.userId, contactId: contact_id, objective,
@@ -507,7 +541,7 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
       const { contact_ids, objective, call_type, note } = req.body ?? {};
       if (!Array.isArray(contact_ids) || !contact_ids.length) return fail(res, 400, 'Select at least one lead');
       if (contact_ids.length > 500) return fail(res, 400, 'At most 500 leads at a time');
-      if (call_type != null && !isCallType(call_type)) return fail(res, 400, `call_type must be one of: ${CALL_TYPES.join(', ')}`);
+      if (call_type != null && !isCallTypeChoice(call_type)) return fail(res, 400, `call_type must be auto or one of: ${CALL_TYPES.join(', ')}`);
       const policy = await salesEngine.getPolicy(auth.userId);
       const ids = [...new Set(contact_ids.map(String))];
       const { rows: owned } = await pool.query(
@@ -515,6 +549,8 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
       );
       let prepared = 0;
       const blocked: { contact_id: string; reason: string }[] = [];
+      // How many of each purpose the planner chose, for the "auto" summary.
+      const purposes: Record<string, number> = {};
       for (const { id } of owned) {
         const r = await salesEngine.queueCall({
           userId: auth.userId, contactId: id,
@@ -522,10 +558,12 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
           callType: call_type ?? null, note: typeof note === 'string' ? note : null,
           awaitApproval: policy.requireCallApproval,
         });
-        if (r.queued) prepared += 1;
-        else blocked.push({ contact_id: id, reason: r.decision.action === 'stop' ? r.decision.reason : 'blocked' });
+        if (r.queued) {
+          prepared += 1;
+          if (r.purpose) purposes[r.purpose.callType] = (purposes[r.purpose.callType] ?? 0) + 1;
+        } else blocked.push({ contact_id: id, reason: r.decision.action === 'stop' ? r.decision.reason : 'blocked' });
       }
-      res.json({ success: true, prepared, awaitingApproval: policy.requireCallApproval, blocked });
+      res.json({ success: true, prepared, awaitingApproval: policy.requireCallApproval, blocked, purposes });
     } catch (err) {
       logger.error({ err }, 'sales_call_queue_bulk_failed');
       fail(res, 500, 'Failed to prepare calls');

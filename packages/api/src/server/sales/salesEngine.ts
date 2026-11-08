@@ -27,6 +27,7 @@ import { SimulatorProvider } from './providers/simulator.ts';
 import { VapiProvider } from './providers/vapi.ts';
 import type { CallEvent, CallProvider } from './providers/index.ts';
 import { describePhone, fillTemplate, getOrgAgent, toCountryCode, type OrgAgentConfig } from './orgAgent.ts';
+import { detectCallPurpose, isCallTypeChoice, planCall, resolveLeadPhone, type CallTypeChoice, type PhoneResolution, type PurposeDecision } from './callPlanner.ts';
 import type { CountryCode } from 'libphonenumber-js/max';
 
 export interface SalesEngineDeps {
@@ -157,6 +158,8 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     policy: SalesCallPolicy;
     timezone: string;
     phone: string | null;
+    /** How the number was found and what kind it is. */
+    number?: PhoneResolution;
     leadProfileId: string | null;
     stage: LeadStage | null;
   }
@@ -164,7 +167,7 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
   async function evaluateGate(userId: string, contactId: string, now = new Date()): Promise<GateContext> {
     const policy = await getPolicy(userId);
 
-    const [leadRes, attemptsRes, todayRes, followUpRes] = await Promise.all([
+    const [leadRes, attemptsRes, todayRes, followUpRes, sheet, org] = await Promise.all([
       pool.query(
         `SELECT p.id, p.stage, p.do_not_call, p.consent_at, p.timezone, p.human_handling,
                 p.consecutive_no_answer, c.phone
@@ -192,6 +195,8 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
           ORDER BY scheduled_for ASC LIMIT 1`,
         [contactId, userId],
       ),
+      getLeadSheetContext(pool, userId, contactId).catch(() => null),
+      loadOrgAgent(),
     ]);
 
     const lead = leadRes.rows[0];
@@ -209,11 +214,18 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     const timezone = lead.timezone || policy.defaultTimezone;
     const followUp = followUpRes.rows[0];
 
-    const decision = decideCallAction({
+    // The number to dial: the contact's phone, or a phone column in the sheet
+    // row, parsed for its country. Invalid and premium-rate numbers count as
+    // "no phone" so the gate stops them with the planner's reason.
+    const localCountry = (toCountryCode(sheet?.company?.country) ?? org.defaultCountry) as CountryCode;
+    const number = resolveLeadPhone({ contactPhone: lead.phone, sheet, localCountry });
+    const dialNumber = number.callable ? number.phone?.e164 ?? null : null;
+
+    const gateDecision = decideCallAction({
       now,
       policy,
       lead: {
-        phone: lead.phone ?? null,
+        phone: dialNumber,
         doNotCall: lead.do_not_call === true,
         consentAt: lead.consent_at ? new Date(lead.consent_at) : null,
         timezone: lead.timezone ?? null,
@@ -229,12 +241,17 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
         ? { scheduledFor: new Date(followUp.scheduled_for), exactTimeRequested: followUp.exact_time_requested === true }
         : null,
     });
+    const decision: CallDecision =
+      gateDecision.action === 'stop' && gateDecision.code === 'no_phone' && number.warning
+        ? { ...gateDecision, reason: number.warning }
+        : gateDecision;
 
     return {
       decision,
       policy,
       timezone,
-      phone: lead.phone ?? null,
+      phone: dialNumber,
+      number,
       leadProfileId: lead.id ?? null,
       stage: (lead.stage as LeadStage) ?? null,
     };
@@ -253,17 +270,32 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     contactId: string;
     objective?: string | null;
     followUpId?: string | null;
-    callType?: CallType | null;
+    /** A call type, or 'auto' to let the planner decide from the note and the lead. */
+    callType?: CallTypeChoice | null;
     /** The user's instructions for this one call (what to remind them about, etc.). */
     note?: string | null;
     /** Park the call in the approval queue instead of letting the worker dial it. */
     awaitApproval?: boolean;
     now?: Date;
-  }): Promise<{ queued: boolean; awaitingApproval: boolean; attemptId: string | null; decision: CallDecision }> {
-    const callType = isCallType(params.callType) ? params.callType : null;
+  }): Promise<{
+    queued: boolean; awaitingApproval: boolean; attemptId: string | null; decision: CallDecision;
+    purpose: PurposeDecision | null; number: PhoneResolution | null;
+  }> {
     const note = params.note?.trim().slice(0, 2000) || null;
     const now = params.now ?? new Date();
-    const ctx = await evaluateGate(params.userId, params.contactId, now);
+    const [ctx, plan] = await Promise.all([
+      evaluateGate(params.userId, params.contactId, now),
+      params.callType === 'auto'
+        ? loadOrgAgent().then((org) => planCall(pool, {
+            userId: params.userId, contactId: params.contactId, requested: 'auto', note, defaultCountry: org.defaultCountry,
+          }))
+        : Promise.resolve(null),
+    ]);
+    const purpose = plan?.purpose ?? (isCallType(params.callType)
+      ? detectCallPurpose({ requested: params.callType })
+      : null);
+    const callType: CallType | null = purpose?.callType ?? null;
+    const extra = { purpose, number: ctx.number ?? null };
     const leadProfileId = ctx.leadProfileId ?? (await ensureLeadProfile(params.userId, params.contactId));
 
     if (ctx.decision.action === 'stop') {
@@ -278,7 +310,7 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
           callType, note,
         ],
       );
-      return { queued: false, awaitingApproval: false, attemptId: rows[0]?.id ?? null, decision: ctx.decision };
+      return { queued: false, awaitingApproval: false, attemptId: rows[0]?.id ?? null, decision: ctx.decision, ...extra };
     }
 
     const runAt = ctx.decision.action === 'reschedule' ? ctx.decision.runAt : now;
@@ -292,7 +324,21 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
         params.awaitApproval ? 'awaiting_approval' : 'queued', runAt, callType, note,
       ],
     );
-    return { queued: true, awaitingApproval: !!params.awaitApproval, attemptId: rows[0]?.id ?? null, decision: ctx.decision };
+    return { queued: true, awaitingApproval: !!params.awaitApproval, attemptId: rows[0]?.id ?? null, decision: ctx.decision, ...extra };
+  }
+
+  /** What a call to this lead would be: purpose, number, and whether the gate allows it now. */
+  async function previewCall(params: { userId: string; contactId: string; callType?: CallTypeChoice | null; note?: string | null }) {
+    const org = await loadOrgAgent();
+    const [plan, ctx] = await Promise.all([
+      planCall(pool, {
+        userId: params.userId, contactId: params.contactId,
+        requested: isCallTypeChoice(params.callType) ? params.callType : 'auto',
+        note: params.note ?? null, defaultCountry: org.defaultCountry,
+      }),
+      evaluateGate(params.userId, params.contactId),
+    ]);
+    return plan ? { ...plan, decision: ctx.decision } : null;
   }
 
   /**
@@ -1024,6 +1070,7 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     ensureLeadProfile,
     evaluateGate,
     queueCall,
+    previewCall,
     approveCalls,
     declineCalls,
     handleProviderEvent,

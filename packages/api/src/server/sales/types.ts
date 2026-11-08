@@ -200,7 +200,7 @@ export interface SalesCallPolicy {
 }
 
 /** What an AI call is for. Drives the default objective and the brief's instructions. */
-export const CALL_TYPES = ['sales', 'follow_up', 'reminder_meeting', 'reminder_payment', 'reminder_followup'] as const;
+export const CALL_TYPES = ['sales', 'follow_up', 'reminder_meeting', 'reminder_payment', 'reminder_followup', 'notice'] as const;
 export type CallType = (typeof CALL_TYPES)[number];
 export function isCallType(v: unknown): v is CallType {
   return typeof v === 'string' && (CALL_TYPES as readonly string[]).includes(v);

@@ -997,7 +997,7 @@ app.use('/r', registerShortLinkRoutes({ pool: pool!, fireAutomationTrigger: auto
 // ── AI Chat & Multi-Agent Routes ───────────────────────────────────────────
 // Per-user UI state that follows the user between devices (guided-tour progress).
 app.use('/api', registerUiStateRoutes({ requireAuth, dbQuery }));
-app.use('/api', registerAIChatRoutes({ requireAuth, getAIConfig, resolveActiveKey, callAINonStreaming, GEMINI_MODELS, pool, dbQuery, createNotification, checkTaskActions, getUserConnectedAccounts, AGENT_DEFS }));
+app.use('/api', registerAIChatRoutes({ requireAuth, getAIConfig, resolveActiveKey, callAINonStreaming, GEMINI_MODELS, pool, dbQuery, createNotification, checkTaskActions, getUserConnectedAccounts, AGENT_DEFS, salesEngine }));
 
 
 // ─── Billing Routes ────────────────────────────────────────────────────────────

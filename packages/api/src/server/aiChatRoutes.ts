@@ -6,6 +6,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logger } from '../logger.ts';
 import { ensureCreditAccount, resolveGeminiModel, recordAIUsage, FAST_MODEL, hasAICredits, recordFastPathSavings, chargeAICredits, resolveTextKey, isPaidKey, computeAICostUsd, classifyAIProviderError, AIUnavailableError, aiErrorFor, aiErrorDetail } from '../ai-helpers.ts';
+import type { Pool } from 'pg';
+import type { SalesEngine } from './sales/salesEngine.ts';
+import { SALES_TOOLS, isSalesTool, runSalesTool, salesToolLabel } from './sales/assistantTools.ts';
 import { DEFAULT_TOOL_RULES, ToolGuard, UNTRUSTED_RULE, canaryLine, capToolResult, checkOutput, fence, mergeScans, scanForInjection } from './aiGuard.ts';
 import { chatTurnKey, makeToolMemo } from './aiCheckpoints.ts';
 import { TurnRegistry, cleanTurnId } from './chatTurns.ts';
@@ -77,6 +80,8 @@ interface AIChatDeps {
   checkTaskActions: (userId: string, actionType: string) => Promise<Array<{ task_id: string; title: string; new_status: string; progress: string }>>;
   getUserConnectedAccounts: (userId: string) => Promise<any[]>;
   AGENT_DEFS: Record<string, { name: string; role: string; icon: string; color: string; memoryKeywords: string[] }>;
+  /** Lets the assistant find leads, queue voice-agent calls and read their results. */
+  salesEngine?: SalesEngine;
 }
 
 // ── Local constants ───────────────────────────────────────────────────────────
@@ -116,6 +121,11 @@ const AI_CORE_RULES = `
 ## BIG OR MULTI-PART REQUESTS (do not remove)
 - Never try to do a big request in one go. Break it into steps and do them one at a time, in order: say the steps in one short line, then make ONE tool call per step and wait for its result before the next (e.g. a month of posts → create_posts_batch once — the server splits it into parts of 10 and makes them in parallel; a blog article → create_draft; to-dos → create_task).
 - Never put several different jobs into one tool call, never skip a step, and never say a step is done before its tool result says so. If a step fails, say which one and carry on with the others.
+
+## SALES CALLS (do not remove)
+- You work with the AI voice agent that phones the user's sales leads. To call someone: find_sales_leads, then call_sales_lead with the reason in plain words (what to say, remind or ask). The call's purpose and the number's country and type are detected for you — say them back in one line, plus any number_note.
+- Only call when the user asked for that call. Never invent amounts, dates or promises for the reason; use what the user said or what the lead record shows.
+- If the result says awaiting_approval, tell the user it is waiting in "Calls to approve" on Sales → Leads. If not_called, give the why. For "how did the calls go", use get_sales_call_results.
 
 ## WHEN TO ASK QUESTIONS (do not remove)
 - Default to doing the work. Ask only when a missing answer would make the result wrong for THIS user AND you cannot work it out from ABOUT THIS USER, the design system, custom instructions, preferences, LIVE SAAS STATE (connected accounts, recent posts) or this conversation.
@@ -689,6 +699,8 @@ const AI_TOOLS: Anthropic.Tool[] = [
       required: ['action'],
     },
   },
+  // Sales: find leads, have the voice agent call one, read call results.
+  ...SALES_TOOLS,
 ];
 
 // ── Local helpers ─────────────────────────────────────────────────────────────
@@ -721,6 +733,8 @@ function aiToolLabel(name: string, input: any): string {
 }
 
 function aiToolLabelPlain(name: string, input: any): string {
+  const salesLabel = salesToolLabel(name, input);
+  if (salesLabel) return salesLabel;
   switch (name) {
     case 'create_posts_batch': {
       const n = Math.round(Number(input?.count)) || (Array.isArray(input?.posts) ? input.posts.length : 0);
@@ -757,6 +771,7 @@ export function registerAIChatRoutes({
   checkTaskActions,
   getUserConnectedAccounts,
   AGENT_DEFS,
+  salesEngine,
 }: AIChatDeps): Router {
   const router = express.Router();
 
@@ -1060,6 +1075,10 @@ export function registerAIChatRoutes({
   }
 
   async function executeAITool(name: string, input: any, userId: string): Promise<any> {
+    if (isSalesTool(name)) {
+      if (!salesEngine || !pool) throw new Error('Sales calling is not available on this server.');
+      return runSalesTool({ pool: pool as unknown as Pool, salesEngine }, name, input, userId);
+    }
     switch (name) {
       case 'remember_preference': {
         const kind = (['like', 'dislike', 'rule', 'change'].includes(input?.kind) ? input.kind : 'rule') as any;

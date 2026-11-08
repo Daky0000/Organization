@@ -323,14 +323,17 @@ export interface SalesCallAttempt {
   summary?: string | null;
 }
 
-export const CALL_TYPES = ['sales', 'follow_up', 'reminder_meeting', 'reminder_payment', 'reminder_followup'] as const;
+export const CALL_TYPES = ['sales', 'follow_up', 'reminder_meeting', 'reminder_payment', 'reminder_followup', 'notice'] as const;
 export type CallType = (typeof CALL_TYPES)[number];
+/** A call type, or 'auto' to let the planner decide from the reason and the lead. */
+export type CallTypeChoice = CallType | 'auto';
 export const CALL_TYPE_LABELS: Record<CallType, string> = {
   sales: 'Sales call',
   follow_up: 'Follow-up call',
   reminder_meeting: 'Meeting / appointment reminder',
   reminder_payment: 'Payment / deadline reminder',
   reminder_followup: 'Scheduled follow-up reminder',
+  notice: 'Notice / important information',
 };
 export const CALL_TYPE_HINTS: Record<CallType, string> = {
   sales: 'What should the AI try to achieve? e.g. "Introduce our accounting course and book a demo."',
@@ -338,7 +341,27 @@ export const CALL_TYPE_HINTS: Record<CallType, string> = {
   reminder_meeting: 'Which meeting? e.g. "Onboarding session, Tuesday 14 May, 10am, Zoom link sent by email."',
   reminder_payment: 'What is due? e.g. "Balance of GHS 500 for the June cohort, due Friday." The sheet row is read too.',
   reminder_followup: 'What was the follow-up about? The lead\'s open reminders and activity are read too.',
+  notice: 'What must they be told? e.g. "Saturday\'s session moves to Sunday 10am, same venue." Said plainly, then checked.',
 };
+
+export interface PhoneResolution {
+  phone: PhoneInfo | null;
+  /** "Phone", or the sheet column the number came from. */
+  source: string | null;
+  callable: boolean;
+  warning: string | null;
+  /** mobile, landline, toll-free… */
+  typeLabel?: string | null;
+}
+
+export interface CallPlan {
+  contactId: string;
+  leadName: string;
+  purpose: { callType: CallType; reason: string; autoDetected: boolean };
+  number: PhoneResolution;
+  localCountry: string;
+  decision: CallDecision;
+}
 
 export interface CallApproval {
   id: string;
@@ -765,9 +788,19 @@ export const salesService = {
     );
   },
 
-  async queueCall(contactId: string, objective?: string, opts?: { callType?: CallType; note?: string }) {
+  /** Purpose, number and gate decision for a call, before anything is queued. */
+  async planCall(contactId: string, opts: { callType?: CallTypeChoice; note?: string }) {
     return assertSuccess(
-      await api.post<{ success: boolean; error?: string; queued: boolean; decision: CallDecision }>(
+      await api.post<{ success: boolean; error?: string; plan: CallPlan }>(
+        '/api/sales/calls/plan',
+        { contact_id: contactId, call_type: opts.callType ?? 'auto', note: opts.note },
+      ),
+    ).plan;
+  },
+
+  async queueCall(contactId: string, objective?: string, opts?: { callType?: CallTypeChoice; note?: string }) {
+    return assertSuccess(
+      await api.post<{ success: boolean; error?: string; queued: boolean; decision: CallDecision; purpose: CallPlan['purpose'] | null; number: PhoneResolution | null }>(
         '/api/sales/calls/queue',
         { contact_id: contactId, objective, call_type: opts?.callType, note: opts?.note },
       ),
@@ -775,9 +808,9 @@ export const salesService = {
   },
 
   /** Prepares AI calls for many leads; they wait for approval unless the policy turns that off. */
-  async queueCallsBulk(contactIds: string[], payload: { callType: CallType; note?: string; objective?: string }) {
+  async queueCallsBulk(contactIds: string[], payload: { callType: CallTypeChoice; note?: string; objective?: string }) {
     return assertSuccess(
-      await api.post<{ success: boolean; error?: string; prepared: number; awaitingApproval: boolean; blocked: Array<{ contact_id: string; reason: string }> }>(
+      await api.post<{ success: boolean; error?: string; prepared: number; awaitingApproval: boolean; blocked: Array<{ contact_id: string; reason: string }>; purposes?: Record<string, number> }>(
         '/api/sales/calls/queue-bulk',
         { contact_ids: contactIds, call_type: payload.callType, note: payload.note, objective: payload.objective },
       ),
