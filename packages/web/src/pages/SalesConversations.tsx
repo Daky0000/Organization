@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, FileText, RefreshCw, Sparkles } from 'lucide-react';
 import {
-  OBJECTION_LABELS, formatDuration, leadName, salesService,
+  formatDateTime, OBJECTION_LABELS, formatDuration, leadName, salesService,
   type SalesConversation, type SalesObjection,
 } from '../services/salesService';
 
@@ -105,7 +105,7 @@ export default function SalesConversations() {
                     )}
                   </div>
                   <p className="mt-0.5 truncate text-xs text-slate-500">
-                    {new Date(c.started_at).toLocaleString()} · {formatDuration(c.duration_sec)}
+                    {formatDateTime(c.started_at)} · {formatDuration(c.duration_sec)}
                   </p>
                   {c.analysis_status !== 'done' && (
                     <p className="mt-1 text-xs font-medium text-amber-600">
@@ -127,7 +127,7 @@ export default function SalesConversations() {
                 <div>
                   <h2 className="text-lg font-black tracking-tight text-slate-950">{leadName(selected)}</h2>
                   <p className="text-sm text-slate-500">
-                    {new Date(selected.started_at).toLocaleString()} · {formatDuration(selected.duration_sec)} ·{' '}
+                    {formatDateTime(selected.started_at)} · {formatDuration(selected.duration_sec)} ·{' '}
                     {selected.created_by === 'human' ? 'logged by hand' : 'AI call'}
                   </p>
                 </div>

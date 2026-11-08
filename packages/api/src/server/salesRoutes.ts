@@ -639,13 +639,27 @@ export function registerSalesRoutes({ requireAuth, pool, salesEngine }: Deps): R
     }
   });
 
+  /** Hang up one of your live calls (ringing or in progress), test or real. */
+  router.post('/calls/:id/hangup', async (req, res) => {
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+    try {
+      res.json({ success: true, ...(await salesEngine.hangUpCall(auth.userId, req.params.id)) });
+    } catch (err) {
+      logger.warn({ err }, 'sales_call_hangup_failed');
+      fail(res, 400, err instanceof Error ? err.message : 'Could not hang up the call');
+    }
+  });
+
   router.get('/calls', async (req, res) => {
     const auth = requireAuth(req, res);
     if (!auth) return;
     try {
       const contactId = typeof req.query.contactId === 'string' && req.query.contactId ? req.query.contactId : null;
+      // Settle any call whose end-of-call report is late, so nothing shows "dialing" after it ended.
+      await salesEngine.reconcileOpenCalls({ userId: auth.userId, minAgeSec: 5, limit: 10 }).catch(() => undefined);
       const { rows } = await pool.query(
-        `SELECT a.id, a.contact_id, a.status, a.outcome, a.provider, a.run_at, a.started_at, a.ended_at, a.duration_sec,
+        `SELECT a.id, a.contact_id, a.status, a.outcome, a.ended_reason, a.provider, a.run_at, a.created_at, a.started_at, a.ended_at, a.duration_sec,
                 a.block_reason, a.last_error, a.objective, a.call_type, a.call_note,
                 a.recording_url, a.transcript, sc.summary,
                 c.first_name, c.last_name, c.phone

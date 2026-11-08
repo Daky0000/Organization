@@ -175,15 +175,41 @@ export interface LeadReminder {
   email?: string | null;
 }
 
-/** "Fri 13 Nov, 15:00" in the given zone. */
+/** "Fri 13 Nov, 3:00 PM" in the given zone. Always 12-hour. */
 export function formatInZone(iso: string, tz?: string | null): string {
   try {
     return new Intl.DateTimeFormat(undefined, {
-      timeZone: tz || undefined, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+      timeZone: tz || undefined, weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true,
     }).format(new Date(iso));
   } catch {
-    return new Date(iso).toLocaleString();
+    return formatDateTime(iso);
   }
+}
+
+/** "13 Nov 2026, 3:05 PM" — the one date-and-time format the sales pages show. Always 12-hour. */
+export function formatDateTime(iso: string | Date | null | undefined): string {
+  if (!iso) return '—';
+  const d = iso instanceof Date ? iso : new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString(undefined, {
+    day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
+  });
+}
+
+/** "3:05 PM" — always 12-hour. */
+export function formatTime(iso: string | Date | null | undefined): string {
+  if (!iso) return '—';
+  const d = iso instanceof Date ? iso : new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
+/** "09:00" (policy windows are stored 24-hour) → "9:00 AM". */
+export function formatClock(hhmm: string | null | undefined): string {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm ?? ''));
+  if (!m) return String(hhmm ?? '');
+  const h = Number(m[1]) % 24;
+  return `${h % 12 === 0 ? 12 : h % 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`;
 }
 
 /** UTC ISO → "YYYY-MM-DDTHH:mm" wall clock in tz (for datetime-local inputs). */
@@ -302,6 +328,7 @@ export interface SalesCallAttempt {
   provider: string;
   status: string;
   outcome: string | null;
+  ended_reason?: string | null;
   run_at: string;
   started_at: string | null;
   duration_sec: number | null;
@@ -473,7 +500,9 @@ export interface TestCallRecord {
   to_number: string | null;
   status: string;
   outcome: string | null;
+  created_at?: string | null;
   started_at: string | null;
+  ended_at?: string | null;
   duration_sec: number | null;
   transcript: string | null;
   recording_url: string | null;
@@ -928,6 +957,13 @@ export const salesService = {
     );
   },
 
+  /** Hang up a ringing or connected call. */
+  async hangUpCall(attemptId: string) {
+    return assertSuccess(
+      await api.post<{ success: boolean; error?: string; ended: boolean; message: string }>(`/api/sales/calls/${attemptId}/hangup`, {}),
+    );
+  },
+
   async listTestCalls() {
     const data = assertSuccess(
       await api.get<{ success: boolean; error?: string; calls: TestCallRecord[] }>('/api/sales/test-call/history'),
@@ -956,6 +992,46 @@ export function leadName(lead: { first_name?: string | null; last_name?: string 
   const name = [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim();
   return name || lead.phone || 'Unnamed lead';
 }
+
+/** A call that is ringing or connected — the only state it can be hung up from. */
+export function isCallLive(status: string | null | undefined): boolean {
+  return status === 'dialing' || status === 'in_progress';
+}
+
+/**
+ * What happened, in words: "Ringing…", "In progress", "Answered", "Declined /
+ * busy", "No answer", "Didn't go through"… Combines status and outcome so a
+ * finished call never reads as "dialing".
+ */
+export function callStatusLabel(status: string | null | undefined, outcome?: string | null, endedReason?: string | null): {
+  label: string; tone: 'live' | 'good' | 'bad' | 'neutral';
+} {
+  if (status === 'dialing') return { label: 'Ringing…', tone: 'live' };
+  if (status === 'in_progress') return { label: 'In progress', tone: 'live' };
+  if (status === 'queued') return { label: 'Queued', tone: 'neutral' };
+  if (status === 'awaiting_approval') return { label: 'Waiting for approval', tone: 'neutral' };
+  if (status === 'cancelled') return { label: 'Cancelled', tone: 'neutral' };
+  if (status === 'blocked') return { label: 'Not called', tone: 'bad' };
+  const reason = String(endedReason ?? '').toLowerCase();
+  if (reason.includes('customer-ended') && outcome !== 'answered') return { label: 'Declined', tone: 'bad' };
+  switch (outcome) {
+    case 'answered': return { label: 'Answered', tone: 'good' };
+    case 'no_answer': return { label: 'No answer', tone: 'bad' };
+    case 'busy': return { label: 'Declined / busy', tone: 'bad' };
+    case 'rejected': return { label: 'Declined', tone: 'bad' };
+    case 'voicemail': return { label: 'Voicemail', tone: 'neutral' };
+    case 'invalid_number': return { label: 'Invalid number', tone: 'bad' };
+    case 'failed': return { label: "Didn't go through", tone: 'bad' };
+    default: return status === 'failed' ? { label: "Didn't go through", tone: 'bad' } : { label: 'Ended', tone: 'neutral' };
+  }
+}
+
+export const CALL_TONE_CLASSES: Record<'live' | 'good' | 'bad' | 'neutral', string> = {
+  live: 'bg-blue-50 text-blue-700',
+  good: 'bg-emerald-50 text-emerald-700',
+  bad: 'bg-rose-50 text-rose-700',
+  neutral: 'bg-slate-100 text-slate-600',
+};
 
 export function formatDuration(seconds: number | null | undefined): string {
   if (!seconds) return '—';

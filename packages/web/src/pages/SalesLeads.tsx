@@ -4,7 +4,7 @@ import {
   PhoneOff, Plus, Search, ShieldAlert, UserCircle2,
 } from 'lucide-react';
 import {
-  LEAD_STAGES, STAGE_COLORS, formatDuration, leadName, salesService,
+  formatDateTime, LEAD_STAGES, STAGE_COLORS, formatDuration, leadName, salesService,
   type CallPreview, type LeadStage, type SalesConversation, type SalesFollowUp,
   type SalesLead, type SalesObjection, type SalesCallAttempt,
   OBJECTION_LABELS,
@@ -42,7 +42,7 @@ function GateVerdict({ preview }: { preview: CallPreview }) {
       <div className="flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
         <Clock size={15} className="mt-0.5 shrink-0" />
         <span>
-          Next permitted slot is {new Date(d.runAt).toLocaleString()} ({preview.timezone}).
+          Next permitted slot is {formatDateTime(d.runAt)} ({preview.timezone}).
           <span className="text-sky-600"> Reason: {d.reason.replace(/_/g, ' ')}.</span>
         </span>
       </div>
@@ -258,7 +258,7 @@ function LeadDetail({ contactId, onBack }: { contactId: string; onBack: () => vo
                 <li key={c.id} className="rounded-xl border border-slate-200 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-slate-500">
-                      {new Date(c.started_at).toLocaleString()} · {formatDuration(c.duration_sec)} · {c.created_by === 'human' ? 'logged by hand' : 'AI call'}
+                      {formatDateTime(c.started_at)} · {formatDuration(c.duration_sec)} · {c.created_by === 'human' ? 'logged by hand' : 'AI call'}
                     </span>
                     {c.analysis_status === 'done' ? (
                       <span className="text-xs text-slate-400">
@@ -288,7 +288,7 @@ function LeadDetail({ contactId, onBack }: { contactId: string; onBack: () => vo
             <ul className="space-y-2">
               {attempts.map((a) => (
                 <li key={a.id} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="text-slate-600">{new Date(a.started_at ?? a.run_at).toLocaleString()}</span>
+                  <span className="text-slate-600">{formatDateTime(a.started_at ?? a.run_at)}</span>
                   <span className="text-slate-500">
                     {a.outcome ?? a.status}
                     {a.block_reason && <span className="text-rose-500"> — {a.block_reason}</span>}
@@ -320,7 +320,7 @@ function LeadDetail({ contactId, onBack }: { contactId: string; onBack: () => vo
               {followUps.map((f) => (
                 <li key={f.id} className="text-sm">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-slate-700">{new Date(f.scheduled_for).toLocaleString()}</span>
+                    <span className="font-semibold text-slate-700">{formatDateTime(f.scheduled_for)}</span>
                     <span className="text-xs capitalize text-slate-400">{f.status}</span>
                   </div>
                   {f.reason && <p className="text-xs text-slate-500">{f.reason}</p>}

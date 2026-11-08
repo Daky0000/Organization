@@ -138,3 +138,35 @@ test('test numbers default, and parse from a list or lines', async () => {
   assert.deepEqual(parseNumberList('0201234567\n\n0501234567, 0201234567'), ['0201234567', '0501234567']);
   assert.deepEqual(resolveOrgAgent({ testNumbers: '[]' }).testNumbers, []);
 });
+
+test('agent assistants enable live call control, so calls can be hung up', () => {
+  const provider = new VapiProvider({ apiKey: 'k', publicKey: null, phoneNumberId: 'p', webhookSecret: 's' }, { name: 'Ama' });
+  const a = provider.buildAssistant({ firstMessage: 'Hi', systemPrompt: 'x', voiceId: null, maxDurationSec: 60, recordingEnabled: true }) as any;
+  assert.deepEqual(a.monitorPlan, { controlEnabled: true });
+});
+
+test('fetchCall turns a finished Vapi call into an ended event, and a live one into none', async () => {
+  const axios = (await import('axios')).default as any;
+  const realGet = axios.get;
+  const provider = new VapiProvider({ apiKey: 'k', publicKey: null, phoneNumberId: 'p', webhookSecret: 's' });
+  try {
+    axios.get = async () => ({ data: {
+      status: 'ended', endedReason: 'customer-busy',
+      startedAt: '2026-11-08T10:00:00Z', endedAt: '2026-11-08T10:00:04Z',
+      monitor: { controlUrl: 'https://ctl.example/1' },
+    } });
+    const ended = await provider.fetchCall('c1');
+    assert.equal(ended.event?.kind, 'ended');
+    assert.equal((ended.event as any).outcome, 'busy');
+    assert.equal((ended.event as any).durationSec, 4);
+    assert.equal(ended.controlUrl, 'https://ctl.example/1');
+
+    axios.get = async () => ({ data: { status: 'ringing' } });
+    assert.equal((await provider.fetchCall('c2')).event, null);
+
+    axios.get = async () => ({ data: { status: 'in-progress', startedAt: '2026-11-08T10:00:00Z' } });
+    assert.equal((await provider.fetchCall('c3')).event?.kind, 'started');
+  } finally {
+    axios.get = realGet;
+  }
+});

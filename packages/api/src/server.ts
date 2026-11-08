@@ -1256,6 +1256,9 @@ if (config.nodeEnv !== 'test') {
     // Dial queued attempts every minute. Each one re-runs the compliance gate
     // before it dials — the queue is a plan, not a permission.
     setInterval(() => void salesEngine.processDueCallAttempts(), 60 * 1000);
+    // Settle calls whose end-of-call report never arrived (declined, failed,
+    // unreachable webhook) by asking Vapi, so none stays "dialing".
+    setInterval(() => void salesEngine.reconcileOpenCalls().catch(() => undefined), 60 * 1000);
     // Recompute answer-rate priors. Delayed at boot so a restart doesn't run a
     // full-table aggregate while everything else is warming up.
     setTimeout(() => void salesEngine.rollupCallStats(), 25 * 60 * 1000);

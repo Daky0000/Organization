@@ -126,6 +126,8 @@ export class VapiProvider implements CallProvider {
     if (agent) {
       // Lets the agent hang up after the goodbye instead of waiting for silence.
       assistant.endCallFunctionEnabled = true;
+      // Gives the call a control URL, so a person can hang it up from the app.
+      assistant.monitorPlan = { controlEnabled: true };
     }
     if (agent?.name) assistant.name = agent.name.slice(0, 40);
     if (agent?.endCallMessage) assistant.endCallMessage = agent.endCallMessage;
@@ -229,12 +231,72 @@ export class VapiProvider implements CallProvider {
     return { assistantId };
   }
 
+  /**
+   * Ask Vapi where a call is now. The webhook is the normal path, but a
+   * report that never arrives (unreachable server URL, a call that failed
+   * before connecting) would leave the attempt "dialing" forever — so open
+   * attempts are reconciled against this. Returns the same event shape the
+   * webhook produces, or null while the call is still live.
+   */
+  async fetchCall(externalId: string): Promise<{ status: string; event: CallEvent | null; controlUrl: string | null }> {
+    if (!this.cfg.apiKey) throw new Error('No Vapi private key configured');
+    const { data } = await axios.get(`${VAPI_API}/call/${externalId}`, {
+      headers: { Authorization: `Bearer ${this.cfg.apiKey}` },
+      timeout: 15_000,
+    });
+    const status = String(data?.status ?? '');
+    const controlUrl = data?.monitor?.controlUrl ? String(data.monitor.controlUrl) : null;
+    if (status !== 'ended') {
+      return {
+        status,
+        event: status === 'in-progress' ? { kind: 'started', externalId, at: data?.startedAt ? new Date(data.startedAt) : new Date() } : null,
+        controlUrl,
+      };
+    }
+    const started = data?.startedAt ? new Date(data.startedAt).getTime() : NaN;
+    const ended = data?.endedAt ? new Date(data.endedAt).getTime() : NaN;
+    const durationSec = Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, Math.round((ended - started) / 1000)) : 0;
+    const artifact = (data?.artifact ?? {}) as Record<string, any>;
+    return {
+      status,
+      controlUrl,
+      event: {
+        kind: 'ended',
+        externalId,
+        at: Number.isFinite(ended) ? new Date(ended) : new Date(),
+        durationSec,
+        outcome: mapVapiEndedReason(data?.endedReason, durationSec),
+        recordingUrl: artifact.recordingUrl ?? artifact.stereoRecordingUrl ?? data?.recordingUrl ?? null,
+        transcript: extractTranscript(artifact) ?? (typeof data?.transcript === 'string' && data.transcript.trim() ? data.transcript.trim() : null),
+        endedReason: data?.endedReason ? String(data.endedReason) : null,
+      },
+    };
+  }
+
+  /**
+   * Hang up a live call through its control URL. Falls back to looking the
+   * URL up when it was not stored (calls placed before this existed).
+   */
+  async endCall(externalId: string, controlUrl: string | null): Promise<void> {
+    let url = controlUrl;
+    if (!url) url = (await this.fetchCall(externalId)).controlUrl;
+    if (!url) throw new Error('This call cannot be hung up from the app (Vapi gave it no control URL).');
+    try {
+      await axios.post(url, { type: 'end-call' }, { headers: { 'Content-Type': 'application/json' }, timeout: 10_000 });
+    } catch (err: any) {
+      const status = err?.response?.status;
+      // Already over: nothing left to hang up.
+      if (status === 404 || status === 410) return;
+      throw new Error(`Vapi did not hang up the call: ${err?.response?.data?.message || err?.message || 'unknown error'}`);
+    }
+  }
+
   /** The browser-safe key, for the Web SDK. Never returns the private key. */
   getPublicKey(): string | null {
     return this.cfg.publicKey || null;
   }
 
-  async placeCall(req: PlaceCallRequest): Promise<{ externalId: string }> {
+  async placeCall(req: PlaceCallRequest): Promise<{ externalId: string; controlUrl: string | null }> {
     return this.placeCallWithAssistant({
       toNumber: req.toNumber,
       assistant: this.buildAssistant(req),
@@ -246,7 +308,7 @@ export class VapiProvider implements CallProvider {
     toNumber: string;
     assistant: Record<string, unknown>;
     metadata: { attemptId: string; userId: string; contactId: string };
-  }): Promise<{ externalId: string }> {
+  }): Promise<{ externalId: string; controlUrl: string | null }> {
     if (!this.isConfigured()) {
       throw new Error('Vapi is not configured — a private API key and phone number ID are required');
     }
@@ -267,7 +329,8 @@ export class VapiProvider implements CallProvider {
       );
       const externalId = data?.id;
       if (!externalId) throw new Error('Vapi accepted the call but returned no id');
-      return { externalId: String(externalId) };
+      // Live call control (monitorPlan.controlEnabled): lets the app hang up.
+      return { externalId: String(externalId), controlUrl: data?.monitor?.controlUrl ? String(data.monitor.controlUrl) : null };
     } catch (err: any) {
       const detail = err?.response?.data?.message || err?.response?.data?.error || err?.message;
       const status = err?.response?.status;

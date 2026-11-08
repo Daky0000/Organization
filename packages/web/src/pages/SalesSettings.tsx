@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Check, ShieldCheck } from 'lucide-react';
-import { salesService, type SalesCallPolicy } from '../services/salesService';
+import { formatClock, salesService, type SalesCallPolicy } from '../services/salesService';
 import ReminderSettingsCard from '../components/sales/leads/ReminderSettingsCard';
 
 const ACCENT = '#2563EB';
@@ -203,6 +203,10 @@ export default function SalesSettings() {
               <input value={policy.defaultTimezone} onChange={(e) => set('defaultTimezone', e.target.value)} className={inputClass} />
             </Field>
           </div>
+          <p className="-mt-2 text-xs text-slate-500">
+            Calls go out between <span className="font-semibold text-slate-700">{formatClock(policy.windowStart)}</span> and{' '}
+            <span className="font-semibold text-slate-700">{formatClock(policy.windowEnd)}</span>, in each lead's own time.
+          </p>
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Max attempts / lead / week">

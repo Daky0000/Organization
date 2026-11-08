@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, PhoneCall, Sparkles, X } from 'lucide-react';
 import {
-  CALL_TYPES, CALL_TYPE_HINTS, CALL_TYPE_LABELS, salesService,
+  formatDateTime, CALL_TYPES, CALL_TYPE_HINTS, CALL_TYPE_LABELS, salesService,
   type CallPlan, type CallTypeChoice,
 } from '../../../services/salesService';
 
@@ -58,7 +58,7 @@ export default function AiCallDialog({
         }
         const what = r.purpose ? `${CALL_TYPE_LABELS[r.purpose.callType]} ` : '';
         onDone(r.decision.action === 'reschedule'
-          ? `${what}queued for the next allowed time: ${new Date(r.decision.runAt).toLocaleString()}.`
+          ? `${what}queued for the next allowed time: ${formatDateTime(r.decision.runAt)}.`
           : `${what}queued. The AI will dial shortly.`);
       } else {
         const r = await salesService.queueCallsBulk(contactIds, { callType, note: note.trim() || undefined });
@@ -144,7 +144,7 @@ export default function AiCallDialog({
                   </span>
                 </li>
                 {plan.decision.action === 'reschedule' && (
-                  <li className="text-amber-700">Outside call hours — it will dial at {new Date(plan.decision.runAt).toLocaleString()}.</li>
+                  <li className="text-amber-700">Outside call hours — it will dial at {formatDateTime(plan.decision.runAt)}.</li>
                 )}
                 {plan.decision.action === 'stop' && (
                   <li className="text-rose-700">Will not be called: {plan.decision.reason}</li>

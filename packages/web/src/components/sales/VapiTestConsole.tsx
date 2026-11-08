@@ -4,7 +4,7 @@ import {
   RefreshCw, Sparkles, XCircle,
 } from 'lucide-react';
 import {
-  formatDuration, salesService,
+  CALL_TONE_CLASSES, callStatusLabel, formatDateTime, formatDuration, isCallLive, salesService,
   type PhoneInfo, type SalesLead, type TestCallRecord, type VapiStatus,
 } from '../../services/salesService';
 
@@ -129,6 +129,29 @@ export default function VapiTestConsole({ leads = [], testNumbers = [] }: {
   }, []);
 
   useEffect(() => { void loadStatus(); void loadHistory(); }, [loadStatus, loadHistory]);
+
+  // While a call is ringing or connected, refresh every few seconds so it moves
+  // to Answered / Declined / No answer on its own. The server asks Vapi for any
+  // call whose report is late, so this never sits at "Ringing…".
+  const anyLive = history.some((c) => isCallLive(c.status));
+  useEffect(() => {
+    if (!anyLive) return;
+    const t = setInterval(() => void loadHistory(), 5000);
+    return () => clearInterval(t);
+  }, [anyLive, loadHistory]);
+
+  const [hangingUp, setHangingUp] = useState<string | null>(null);
+  const hangUp = async (id: string) => {
+    setHangingUp(id);
+    try {
+      await salesService.hangUpCall(id);
+      setTimeout(() => void loadHistory(), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not hang up the call');
+    } finally {
+      setHangingUp(null);
+    }
+  };
 
   // Always tear the call down on unmount — navigating away with a live mic
   // session running is the one bug users notice immediately.
@@ -494,16 +517,36 @@ export default function VapiTestConsole({ leads = [], testNumbers = [] }: {
             </button>
           </div>
           <ul className="mt-2 space-y-2">
-            {history.map((call) => (
+            {history.map((call) => {
+              const st = callStatusLabel(call.status, call.outcome, call.ended_reason);
+              const live = isCallLive(call.status);
+              return (
               <li key={call.id} className="rounded-xl border border-slate-200 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <span className="font-semibold text-slate-800">{call.to_number ?? 'browser'}</span>
-                  <span className="text-slate-500">
-                    {call.started_at ? new Date(call.started_at).toLocaleString() : '—'} ·{' '}
-                    {formatDuration(call.duration_sec)} · {call.outcome ?? call.status}
-                    {call.ended_reason && ` (${call.ended_reason})`}
+                  <span className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-800">{call.to_number ?? 'browser'}</span>
+                    <span className={`rounded-full px-2 py-0.5 font-semibold ${CALL_TONE_CLASSES[st.tone]}`}>{st.label}</span>
+                  </span>
+                  <span className="flex items-center gap-2 text-slate-500">
+                    <span>
+                      {formatDateTime(call.started_at ?? call.created_at)}
+                      {!live && <> · {formatDuration(call.duration_sec)}</>}
+                    </span>
+                    {live && (
+                      <button
+                        type="button"
+                        onClick={() => void hangUp(call.id)}
+                        disabled={hangingUp === call.id}
+                        className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-2.5 py-1 font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+                      >
+                        <PhoneOff size={12} /> {hangingUp === call.id ? 'Hanging up…' : 'Hang up'}
+                      </button>
+                    )}
                   </span>
                 </div>
+                {call.ended_reason && !live && (
+                  <p className="mt-1 text-[11px] text-slate-400">Vapi: {call.ended_reason.replace(/-/g, ' ')}</p>
+                )}
                 {call.last_error && <p className="mt-1 text-xs text-rose-600">{call.last_error}</p>}
                 {call.transcript && (
                   <details className="mt-1.5">
@@ -519,7 +562,8 @@ export default function VapiTestConsole({ leads = [], testNumbers = [] }: {
                   </audio>
                 )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         </div>
       )}

@@ -5015,6 +5015,11 @@ async function createSalesLeadWorkspaceTables(pool: Pool): Promise<void> {
     ON sales_call_attempts (user_id, created_at DESC) WHERE status = 'awaiting_approval'`);
   await step('sales_call_policies.require_call_approval',
     `ALTER TABLE sales_call_policies ADD COLUMN IF NOT EXISTS require_call_approval BOOLEAN NOT NULL DEFAULT true`);
+  // Vapi live-call control URL: how a person hangs up a call from the app.
+  await step('sales_call_attempts.control_url', `ALTER TABLE sales_call_attempts ADD COLUMN IF NOT EXISTS control_url TEXT`);
+  // The reconciler looks up open calls by status; keep that cheap.
+  await step('sales_call_attempts_open_idx', `CREATE INDEX IF NOT EXISTS sales_call_attempts_open_idx
+    ON sales_call_attempts (updated_at) WHERE status IN ('dialing','in_progress')`);
 
   // One digest per user per local day; the row is the claim.
   await step('sales_digest_log', `

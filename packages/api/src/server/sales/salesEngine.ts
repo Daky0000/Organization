@@ -456,7 +456,7 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
           continue;
         }
 
-        const { externalId } = await provider.placeCall({
+        const { externalId, controlUrl } = await provider.placeCall({
           toNumber: phone.e164,
           fromNumber: ctx.policy.fromNumber,
           firstMessage,
@@ -469,10 +469,10 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
 
         await pool.query(
           `UPDATE sales_call_attempts
-              SET status='in_progress', provider=$1, external_id=$2, brief=$3, started_at=NOW(),
+              SET status='dialing', provider=$1, external_id=$2, brief=$3, started_at=NOW(), control_url=$7,
                   local_weekday=$4, local_hour=$5, updated_at=NOW()
             WHERE id=$6`,
-          [provider.id, externalId, brief.systemPrompt, bucket.weekday, bucket.hour, attempt.id],
+          [provider.id, externalId, brief.systemPrompt, bucket.weekday, bucket.hour, attempt.id, controlUrl ?? null],
         );
 
         if (attempt.followup_id) {
@@ -970,14 +970,14 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     const attemptId = rows[0].id;
 
     try {
-      const { externalId } = await provider.placeCallWithAssistant({
+      const { externalId, controlUrl } = await provider.placeCallWithAssistant({
         toNumber: params.toNumber,
         assistant,
         metadata: { attemptId, userId: params.userId, contactId: '' },
       });
       await pool.query(
-        `UPDATE sales_call_attempts SET external_id=$1, started_at=NOW(), updated_at=NOW() WHERE id=$2`,
-        [externalId, attemptId],
+        `UPDATE sales_call_attempts SET external_id=$1, control_url=$3, started_at=NOW(), updated_at=NOW() WHERE id=$2`,
+        [externalId, attemptId, controlUrl],
       );
       logger.info({ userId: params.userId, attemptId, firstMessage }, 'sales_test_call_placed');
       return { attemptId, externalId };
@@ -1019,8 +1019,10 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
   }
 
   async function listTestCalls(userId: string) {
+    // Settle calls whose report is late before showing them.
+    await reconcileOpenCalls({ userId, minAgeSec: 5, limit: 10 }).catch(() => undefined);
     const { rows } = await pool.query(
-      `SELECT id, to_number, status, outcome, started_at, duration_sec, transcript,
+      `SELECT id, to_number, status, outcome, created_at, started_at, ended_at, duration_sec, transcript,
               recording_url, ended_reason, last_error, objective
          FROM sales_call_attempts
         WHERE user_id=$1 AND is_test=true
@@ -1028,6 +1030,116 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
       [userId],
     );
     return rows;
+  }
+
+  // ─── Open-call reconciliation and hang-up ──────────────────────────────────
+
+  /** A call still "dialing" after this long without ever being placed was lost. */
+  const NEVER_PLACED_AFTER_MIN = 10;
+  /** Past the longest allowed call plus slack, an open call is certainly over. */
+  const GIVE_UP_AFTER_MIN = 45;
+
+  /**
+   * Bring open attempts (dialing / in progress) in line with Vapi. The webhook
+   * is the normal path; this catches reports that never arrive, so a call
+   * that was declined, failed or ended never sits at "dialing". Finished calls
+   * go through handleProviderEvent — the same path as the webhook — so the
+   * lead, the timeline and the analysis are updated exactly once.
+   */
+  async function reconcileOpenCalls(opts: { userId?: string; minAgeSec?: number; limit?: number } = {}): Promise<number> {
+    const params: unknown[] = [opts.minAgeSec ?? 20];
+    let scope = '';
+    if (opts.userId) {
+      params.push(opts.userId);
+      scope = `AND user_id=$${params.length}`;
+    }
+    const { rows } = await pool.query(
+      `SELECT id, provider, external_id, status, updated_at, created_at
+         FROM sales_call_attempts
+        WHERE status IN ('dialing','in_progress') ${scope}
+          AND updated_at < NOW() - make_interval(secs => $1)
+        ORDER BY updated_at ASC LIMIT ${Math.min(50, opts.limit ?? 20)}`,
+      params,
+    );
+    if (!rows.length) return 0;
+
+    let settled = 0;
+    let vapi: VapiProvider | null = null;
+    for (const a of rows) {
+      const ageMin = (Date.now() - new Date(a.created_at).getTime()) / 60_000;
+      try {
+        if (!a.external_id) {
+          // Claimed by the dialer but never handed to Vapi (a crash mid-dial).
+          if (ageMin >= NEVER_PLACED_AFTER_MIN) {
+            await pool.query(
+              `UPDATE sales_call_attempts SET status='failed', outcome='failed', ended_at=NOW(), updated_at=NOW(),
+                      last_error=COALESCE(last_error, 'The call was never placed.') WHERE id=$1 AND status IN ('dialing','in_progress')`,
+              [a.id],
+            );
+            settled += 1;
+          }
+          continue;
+        }
+        if (a.provider !== 'vapi') continue;
+        vapi ??= await buildVapiProvider();
+        const { event } = await vapi.fetchCall(String(a.external_id));
+        if (event?.kind === 'ended') {
+          await handleProviderEvent('vapi', event);
+          settled += 1;
+        } else if (event?.kind === 'started' && a.status === 'dialing') {
+          await handleProviderEvent('vapi', event);
+        } else if (ageMin >= GIVE_UP_AFTER_MIN) {
+          await pool.query(
+            `UPDATE sales_call_attempts SET status='failed', outcome='failed', ended_at=NOW(), updated_at=NOW(),
+                    last_error='No result from Vapi.' WHERE id=$1 AND status IN ('dialing','in_progress')`,
+            [a.id],
+          );
+          settled += 1;
+        } else {
+          // Still live: touch it so the next pass checks the others first.
+          await pool.query(`UPDATE sales_call_attempts SET updated_at=NOW() WHERE id=$1`, [a.id]);
+        }
+      } catch (err: any) {
+        const status = err?.response?.status;
+        if (status === 404) {
+          await pool.query(
+            `UPDATE sales_call_attempts SET status='failed', outcome='failed', ended_at=NOW(), updated_at=NOW(),
+                    last_error='Vapi has no record of this call.' WHERE id=$1 AND status IN ('dialing','in_progress')`,
+            [a.id],
+          );
+          settled += 1;
+        } else {
+          logger.warn({ err: err?.message, attemptId: a.id }, 'sales_reconcile_call_failed');
+        }
+      }
+    }
+    return settled;
+  }
+
+  /** Hang up one of the user's live calls (test or real). */
+  async function hangUpCall(userId: string, attemptId: string): Promise<{ ended: boolean; message: string }> {
+    const { rows } = await pool.query(
+      `SELECT id, provider, external_id, control_url, status FROM sales_call_attempts WHERE id=$1 AND user_id=$2`,
+      [attemptId, userId],
+    );
+    const a = rows[0];
+    if (!a) throw new Error('Call not found');
+    if (!['dialing', 'in_progress'].includes(a.status)) {
+      return { ended: false, message: 'This call is already over.' };
+    }
+    if (!a.external_id) {
+      await pool.query(
+        `UPDATE sales_call_attempts SET status='cancelled', ended_at=NOW(), updated_at=NOW() WHERE id=$1`,
+        [a.id],
+      );
+      return { ended: true, message: 'The call was stopped before it dialled.' };
+    }
+    if (a.provider !== 'vapi') throw new Error('Only Vapi calls can be hung up.');
+    const provider = await buildVapiProvider();
+    await provider.endCall(String(a.external_id), a.control_url ?? null);
+    // Vapi ends the call within a second or two; pick up the real outcome.
+    setTimeout(() => void reconcileOpenCalls({ userId, minAgeSec: 0, limit: 5 }).catch(() => undefined), 3000);
+    return { ended: true, message: 'Hung up.' };
   }
 
   // ─── Manual conversation entry (the Phase 1 doorway) ───────────────────────
@@ -1066,6 +1178,8 @@ export function buildSalesEngine({ pool, getPlatformConfig }: SalesEngineDeps) {
     getWebTestConfig,
     getVapiStatus,
     listTestCalls,
+    reconcileOpenCalls,
+    hangUpCall,
     buildCallBriefFor: async (userId: string, contactId: string, opts?: { objective?: string | null; callType?: string | null; note?: string | null }) =>
       buildCallBrief(pool, { userId, contactId, ...opts, agent: await loadOrgAgent() }),
     getOrgAgent: loadOrgAgent,

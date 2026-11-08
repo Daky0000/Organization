@@ -61,7 +61,8 @@ export interface CallProvider {
   readonly id: string;
   /** True when the provider has everything it needs to actually dial. */
   isConfigured(): boolean;
-  placeCall(req: PlaceCallRequest): Promise<{ externalId: string }>;
+  /** controlUrl, when the provider offers live call control (used to hang up). */
+  placeCall(req: PlaceCallRequest): Promise<{ externalId: string; controlUrl?: string | null }>;
   verifySignature(headers: Record<string, string | string[] | undefined>, rawBody: string): boolean;
   normalizeWebhook(body: unknown): CallEvent;
   cancelCall(externalId: string): Promise<void>;

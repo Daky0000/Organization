@@ -3,7 +3,7 @@ import {
   AlertTriangle, Bot, CalendarClock, Check, CheckSquare, ExternalLink, Mail, MessageSquare, Phone, RefreshCw, User, X,
 } from 'lucide-react';
 import {
-  leadName, salesService, type LeadReminder, type SalesFollowUp,
+  formatDateTime, leadName, salesService, type LeadReminder, type SalesFollowUp,
 } from '../services/salesService';
 import { ReminderCard } from '../components/sales/leads/ActivityTimeline';
 import { openAppUrl } from '../components/sales/leads/useLeadParam';
@@ -183,7 +183,7 @@ function AiFollowUps({ onError }: { onError: (msg: string | null) => void }) {
                 <div className="min-w-0">
                   <p className="truncate text-sm font-bold text-slate-900">{leadName(f)}</p>
                   <p className="text-xs text-slate-500">
-                    {new Date(f.scheduled_for).toLocaleString()} · {f.type.replace(/_/g, ' ')} ·{' '}
+                    {formatDateTime(f.scheduled_for)} · {f.type.replace(/_/g, ' ')} ·{' '}
                     <span className="capitalize">{f.status}</span>
                   </p>
                   {f.objective && <p className="mt-1 text-sm text-slate-600">{f.objective}</p>}
